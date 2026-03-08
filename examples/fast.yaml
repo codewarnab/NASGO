@@ -1,0 +1,42 @@
+# NAS Fast Configuration
+# Minimal configuration for quick testing and development.
+# Uses proxy evaluation only with a small budget.
+
+experiment:
+  name: "nas-fast"
+  description: "Quick test run with minimal budget"
+  tags:
+    - fast
+    - testing
+  seed: 42
+
+search:
+  strategy: "random"
+  max_evaluations: 50
+  population_size: 20
+  tournament_size: 5
+  num_workers: 1
+
+  search_space:
+    num_nodes: 3
+    num_input_nodes: 2
+    edges_per_node: 2
+    operations:
+      - identity
+      - conv_3x3
+      - sep_conv_3x3
+      - max_pool_3x3
+      - zero
+
+evaluator:
+  type: "proxy"
+  dataset: "cifar10"
+
+storage:
+  type: "sqlite"
+  path: "./experiments-fast.db"
+  save_history: false
+
+logging:
+  level: "debug"
+  format: "text"

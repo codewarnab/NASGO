@@ -1,0 +1,59 @@
+# NAS Default Configuration
+# This is the default configuration for neural architecture search.
+# Copy this file and modify for your experiments.
+
+experiment:
+  name: "nas-default"
+  description: "Default NAS experiment with proxy evaluation"
+  tags:
+    - baseline
+    - cifar10
+  seed: 42
+
+search:
+  strategy: "regularized"  # random, evolutionary, regularized
+  max_evaluations: 1000
+  population_size: 100
+  tournament_size: 25
+  num_workers: 1
+
+  search_space:
+    num_nodes: 4
+    num_input_nodes: 2
+    edges_per_node: 2
+    operations:
+      - identity
+      - conv_3x3
+      - conv_5x5
+      - sep_conv_3x3
+      - sep_conv_5x5
+      - max_pool_3x3
+      - avg_pool_3x3
+      - zero
+
+evaluator:
+  type: "proxy"  # proxy, trainer, combined
+  dataset: "cifar10"
+  data_path: "./data"
+  epochs: 50
+  batch_size: 64
+  channels: 16
+  layers: 8
+  learning_rate: 0.025
+  use_gpu: true
+  gpu_device: "cuda:0"
+  python_path: "python"
+  script_path: "./scripts/train.py"
+  timeout: 30m
+  proxy_threshold: 0.5
+
+storage:
+  type: "sqlite"
+  path: "./experiments.db"
+  save_history: true
+  checkpoint_interval: 100
+
+logging:
+  level: "info"
+  format: "text"
+  include_source: false

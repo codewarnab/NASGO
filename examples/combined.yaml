@@ -1,0 +1,59 @@
+# NAS Combined Configuration
+# Uses proxy evaluation to filter candidates, then full training for top ones.
+# A good balance between speed and accuracy.
+
+experiment:
+  name: "nas-combined"
+  description: "Combined proxy + training evaluation for efficient search"
+  tags:
+    - combined
+    - cifar10
+    - efficient
+  seed: 42
+
+search:
+  strategy: "regularized"
+  max_evaluations: 200
+  population_size: 50
+  tournament_size: 15
+  num_workers: 1
+
+  search_space:
+    num_nodes: 4
+    num_input_nodes: 2
+    edges_per_node: 2
+    operations:
+      - identity
+      - conv_3x3
+      - conv_5x5
+      - sep_conv_3x3
+      - sep_conv_5x5
+      - max_pool_3x3
+      - avg_pool_3x3
+      - zero
+
+evaluator:
+  type: "combined"
+  dataset: "cifar10"
+  data_path: "./data"
+  epochs: 20
+  batch_size: 64
+  channels: 16
+  layers: 8
+  learning_rate: 0.025
+  use_gpu: true
+  gpu_device: "cuda:0"
+  python_path: "python"
+  script_path: "./scripts/train.py"
+  timeout: 30m
+  proxy_threshold: 0.4
+
+storage:
+  type: "sqlite"
+  path: "./experiments-combined.db"
+  save_history: true
+  checkpoint_interval: 25
+
+logging:
+  level: "info"
+  format: "text"

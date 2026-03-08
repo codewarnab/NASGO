@@ -1,0 +1,70 @@
+# golangci-lint configuration
+# https://golangci-lint.run/usage/configuration/
+
+run:
+  timeout: 5m
+  tests: true
+
+linters:
+  enable:
+    - errcheck
+    - gosimple
+    - govet
+    - ineffassign
+    - staticcheck
+    - unused
+    - gofmt
+    - goimports
+    - misspell
+    - unconvert
+    - gocritic
+    - revive
+    - prealloc
+
+linters-settings:
+  errcheck:
+    check-type-assertions: true
+    check-blank: false
+
+  govet:
+    enable-all: true
+
+  revive:
+    rules:
+      - name: blank-imports
+      - name: context-as-argument
+      - name: dot-imports
+      - name: error-return
+      - name: error-strings
+      - name: exported
+      - name: increment-decrement
+      - name: var-naming
+      - name: package-comments
+
+  gocritic:
+    enabled-tags:
+      - diagnostic
+      - style
+      - performance
+
+  misspell:
+    locale: US
+
+  goimports:
+    local-prefixes: nas-go
+
+issues:
+  exclude-rules:
+    # Allow unused params in test files
+    - path: _test\.go
+      linters:
+        - unused
+        - gocritic
+
+    # Allow fmt.Print in main
+    - path: cmd/
+      linters:
+        - forbidigo
+
+  max-issues-per-linter: 50
+  max-same-issues: 3

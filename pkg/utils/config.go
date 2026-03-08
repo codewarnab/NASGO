@@ -2,6 +2,7 @@
 package utils
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -252,6 +253,11 @@ func (c *Config) Save(path string) error {
 	}
 
 	return nil
+}
+
+// ToJSON serializes the config to JSON bytes.
+func (c *Config) ToJSON() ([]byte, error) {
+	return json.Marshal(c)
 }
 
 // Validate checks that the configuration is valid.

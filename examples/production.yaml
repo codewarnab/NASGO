@@ -1,0 +1,60 @@
+# NAS Production Configuration
+# Full-scale search with training-based evaluation.
+# Requires GPU and PyTorch installation.
+
+experiment:
+  name: "nas-production"
+  description: "Production NAS with full training evaluation"
+  tags:
+    - production
+    - cifar10
+    - full-training
+  seed: 42
+
+search:
+  strategy: "regularized"
+  max_evaluations: 500
+  population_size: 100
+  tournament_size: 25
+  num_workers: 1
+
+  search_space:
+    num_nodes: 4
+    num_input_nodes: 2
+    edges_per_node: 2
+    operations:
+      - identity
+      - conv_3x3
+      - conv_5x5
+      - sep_conv_3x3
+      - sep_conv_5x5
+      - dil_conv_3x3
+      - max_pool_3x3
+      - avg_pool_3x3
+      - zero
+
+evaluator:
+  type: "trainer"
+  dataset: "cifar10"
+  data_path: "./data"
+  epochs: 50
+  batch_size: 96
+  channels: 36
+  layers: 20
+  learning_rate: 0.025
+  use_gpu: true
+  gpu_device: "cuda:0"
+  python_path: "python"
+  script_path: "./scripts/train.py"
+  timeout: 60m
+
+storage:
+  type: "sqlite"
+  path: "./experiments-production.db"
+  save_history: true
+  checkpoint_interval: 50
+
+logging:
+  level: "info"
+  format: "json"
+  file: "nas-production.log"
