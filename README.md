@@ -24,8 +24,8 @@ See [PROGRESS.md](PROGRESS.md) for current status and limitations, [TESTING.md](
 ## Container
 
 ```sh
-docker build -t nasgo .
-docker run --rm nasgo search --config /app/configs/default.yaml
+docker build -t nasgo:trainer .
+docker run --rm nasgo:trainer search --config /app/configs/default.yaml
 ```
 
 The image includes pinned CPU PyTorch dependencies. Mount `/app/data` to persist downloaded datasets. GPU use needs a CUDA-compatible derivative and host runtime. Proxy searches do not use PyTorch.

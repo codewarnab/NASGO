@@ -1,3 +1,9 @@
+> **Historical design walkthrough**
+>
+> This document records the original implementation plan and may contain stale
+> status claims. Use [PROGRESS.md](PROGRESS.md) as the source of truth for current
+> capabilities and limitations.
+
 # Neural Architecture Search (NAS) in Go - Implementation Plan
 
 > **Session Status**: Session 1 of 7 - Foundation  
