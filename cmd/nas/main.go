@@ -102,14 +102,20 @@ func runSearch(args []string) error {
 		return err
 	}
 
-	// Load configuration (defaults + file + flags)
-	cfg := utils.DefaultConfig()
-	if *configPath != "" {
-		loaded, err := utils.LoadConfig(*configPath)
-		if err != nil {
-			return fmt.Errorf("loading config: %w", err)
-		}
-		cfg = loaded
+	// Load configuration in precedence order: defaults, file, environment, flags.
+	path := *configPath
+	if path == "" {
+		path = strings.TrimSpace(os.Getenv("NAS_CONFIG"))
+	}
+	var cfg *utils.Config
+	var err error
+	if path != "" {
+		cfg, err = utils.LoadConfig(path)
+	} else {
+		cfg, err = utils.LoadConfigFromEnvironment()
+	}
+	if err != nil {
+		return fmt.Errorf("loading config: %w", err)
 	}
 
 	// Override with CLI flags
@@ -319,13 +325,19 @@ func runInfo(args []string) error {
 		return err
 	}
 
-	cfg := utils.DefaultConfig()
-	if *configPath != "" {
-		loaded, err := utils.LoadConfig(*configPath)
-		if err != nil {
-			return fmt.Errorf("loading config: %w", err)
-		}
-		cfg = loaded
+	path := *configPath
+	if path == "" {
+		path = strings.TrimSpace(os.Getenv("NAS_CONFIG"))
+	}
+	var cfg *utils.Config
+	var err error
+	if path != "" {
+		cfg, err = utils.LoadConfig(path)
+	} else {
+		cfg, err = utils.LoadConfigFromEnvironment()
+	}
+	if err != nil {
+		return fmt.Errorf("loading config: %w", err)
 	}
 
 	space, err := buildSearchSpace(cfg)

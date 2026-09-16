@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -165,6 +167,19 @@ type LoggingConfig struct {
 
 // DefaultConfig returns sensible defaults for quick experiments.
 func DefaultConfig() *Config {
+	return defaultConfig()
+}
+
+// LoadConfigFromEnvironment applies environment overrides to the defaults.
+func LoadConfigFromEnvironment() (*Config, error) {
+	cfg := defaultConfig()
+	if err := applyEnvironment(cfg); err != nil {
+		return nil, err
+	}
+	return cfg, nil
+}
+
+func defaultConfig() *Config {
 	return &Config{
 		Experiment: ExperimentConfig{
 			Name: "nas-experiment",
@@ -218,8 +233,8 @@ func DefaultConfig() *Config {
 // LoadConfig loads configuration from a YAML file.
 // Missing fields use defaults.
 func LoadConfig(path string) (*Config, error) {
-	// Start with defaults
-	cfg := DefaultConfig()
+	// Start with defaults without applying environment twice.
+	cfg := defaultConfig()
 
 	// Read file
 	data, err := os.ReadFile(path)
@@ -232,7 +247,77 @@ func LoadConfig(path string) (*Config, error) {
 		return nil, fmt.Errorf("parsing config YAML: %w", err)
 	}
 
+	if err := applyEnvironment(cfg); err != nil {
+		return nil, err
+	}
+
 	return cfg, nil
+}
+
+func applyEnvironment(cfg *Config) error {
+	setInt := func(name string, dst *int) error {
+		v, ok := os.LookupEnv(name)
+		if !ok {
+			return nil
+		}
+		v = strings.TrimSpace(v)
+		if v == "" {
+			return fmt.Errorf("%s must not be empty", name)
+		}
+		n, err := strconv.Atoi(v)
+		if err != nil {
+			return fmt.Errorf("%s must be an integer: %w", name, err)
+		}
+		*dst = n
+		return nil
+	}
+	setBool := func(name string, dst *bool) error {
+		v, ok := os.LookupEnv(name)
+		if !ok {
+			return nil
+		}
+		v = strings.TrimSpace(v)
+		if v == "" {
+			return fmt.Errorf("%s must not be empty", name)
+		}
+		b, err := strconv.ParseBool(v)
+		if err != nil {
+			return fmt.Errorf("%s must be a boolean: %w", name, err)
+		}
+		*dst = b
+		return nil
+	}
+	if v, ok := os.LookupEnv("NAS_SEARCH_STRATEGY"); ok {
+		v = strings.TrimSpace(v)
+		if v == "" {
+			return fmt.Errorf("NAS_SEARCH_STRATEGY must not be empty")
+		}
+		cfg.Search.Strategy = v
+	}
+	if err := setInt("NAS_MAX_EVALUATIONS", &cfg.Search.MaxEvaluations); err != nil {
+		return err
+	}
+	if err := setInt("NAS_NUM_WORKERS", &cfg.Search.NumWorkers); err != nil {
+		return err
+	}
+	if v, ok := os.LookupEnv("NAS_EVALUATOR_TYPE"); ok {
+		v = strings.TrimSpace(v)
+		if v == "" {
+			return fmt.Errorf("NAS_EVALUATOR_TYPE must not be empty")
+		}
+		cfg.Evaluator.Type = v
+	}
+	if v, ok := os.LookupEnv("NAS_STORAGE_PATH"); ok {
+		v = strings.TrimSpace(v)
+		if v == "" {
+			return fmt.Errorf("NAS_STORAGE_PATH must not be empty")
+		}
+		cfg.Storage.Path = v
+	}
+	if err := setBool("NAS_USE_GPU", &cfg.Evaluator.UseGPU); err != nil {
+		return err
+	}
+	return nil
 }
 
 // Save writes configuration to a YAML file.
@@ -281,6 +366,9 @@ func (c *Config) Validate() error {
 	// Check numerical bounds
 	if c.Search.MaxEvaluations < 1 {
 		return fmt.Errorf("max_evaluations must be >= 1")
+	}
+	if c.Search.NumWorkers < 1 {
+		return fmt.Errorf("num_workers must be >= 1")
 	}
 	if c.Search.PopulationSize < 1 {
 		return fmt.Errorf("population_size must be >= 1")
