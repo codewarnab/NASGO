@@ -105,3 +105,44 @@ func TestTrainerSubprocessFailure(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
+
+func TestTrainerSubprocessTimeout(t *testing.T) {
+	dir := t.TempDir()
+	script := filepath.Join(dir, "trainer.py")
+	if err := os.WriteFile(script, []byte("import time\ntime.sleep(2)\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg := DefaultTrainerConfig()
+	cfg.Timeout = 25 * time.Millisecond
+	cfg.TempDir = dir
+	tr, err := NewTrainerEvaluator(cfg, script, "python3")
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := tr.Evaluate(context.Background(), testArch())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Error != "training timeout exceeded" || result.Fitness != 0 {
+		t.Fatalf("unexpected timeout result: %+v", result)
+	}
+}
+
+func TestTrainerMalformedSubprocessOutput(t *testing.T) {
+	dir := t.TempDir()
+	script := filepath.Join(dir, "trainer.py")
+	if err := os.WriteFile(script, []byte("print('not-json')\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg := DefaultTrainerConfig()
+	cfg.Timeout = time.Second
+	cfg.TempDir = dir
+	tr, err := NewTrainerEvaluator(cfg, script, "python3")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = tr.Evaluate(context.Background(), testArch())
+	if err == nil || !strings.Contains(err.Error(), "no JSON found") || !strings.Contains(err.Error(), "not-json") {
+		t.Fatalf("unexpected malformed-output error: %v", err)
+	}
+}
