@@ -225,7 +225,7 @@ func runSearch(args []string) error {
 		resumeHistory = cp.History
 		experimentID = *resumeID
 	}
-	if store != nil {
+	if store != nil && *resumeID == "" {
 		configJSON, _ := cfg.ToJSON()
 		exp := storage.Experiment{
 			ID:          experimentID,
@@ -248,7 +248,8 @@ func runSearch(args []string) error {
 
 	// Configure search
 	checkpointHistory := append([]*searchspace.Architecture(nil), resumeHistory...)
-	var latestEvent search.EvaluationEvent
+	var latestSafeEvent search.EvaluationEvent
+	safeCheckpointHistory := append([]*searchspace.Architecture(nil), resumeHistory...)
 	var resumePopulation []*searchspace.Architecture
 	var resumeStrategyRNG, resumeSearchSpaceRNG uint64
 	if *resumeID != "" {
@@ -275,11 +276,14 @@ func runSearch(args []string) error {
 		ResumeStrategyRNG:    resumeStrategyRNG,
 		ResumeSearchSpaceRNG: resumeSearchSpaceRNG,
 		OnEvaluation: func(event search.EvaluationEvent) {
-			latestEvent = event
 			// Log progress
 			checkpointHistory = append(checkpointHistory, event.Architecture)
-			if store != nil && cfg.Storage.CheckpointInterval > 0 && event.EvaluationNumber%cfg.Storage.CheckpointInterval == 0 {
-				if err := store.SaveSearchCheckpoint(context.Background(), experimentID, storage.Checkpoint{Version: 1, Strategy: cfg.Search.Strategy, EvaluationNumber: event.EvaluationNumber, History: checkpointHistory, BestFitness: event.BestSoFar, Population: event.Population, StrategyRNG: event.StrategyRNG, SearchSpaceRNG: event.SearchSpaceRNG, ConfigJSON: string(configJSON)}); err != nil {
+			if event.CheckpointSafe {
+				latestSafeEvent = event
+				safeCheckpointHistory = append([]*searchspace.Architecture(nil), checkpointHistory...)
+			}
+			if store != nil && cfg.Storage.CheckpointInterval > 0 && event.CheckpointSafe && event.EvaluationNumber >= cfg.Storage.CheckpointInterval {
+				if err := store.SaveSearchCheckpoint(context.Background(), experimentID, storage.Checkpoint{Version: 1, Strategy: cfg.Search.Strategy, EvaluationNumber: event.EvaluationNumber, History: safeCheckpointHistory, BestFitness: event.BestSoFar, Population: event.Population, StrategyRNG: event.StrategyRNG, SearchSpaceRNG: event.SearchSpaceRNG, ConfigJSON: string(configJSON)}); err != nil {
 					logger.Warn("failed to save checkpoint", "error", err)
 				}
 			}
@@ -316,8 +320,8 @@ func runSearch(args []string) error {
 	fmt.Println()
 
 	searchResult, err := searcher.Search(ctx, searchCfg)
-	if searchResult != nil && searchResult.Cancelled && store != nil && len(checkpointHistory) > 0 {
-		cp := storage.Checkpoint{Version: 1, Strategy: cfg.Search.Strategy, EvaluationNumber: len(checkpointHistory), History: checkpointHistory, BestFitness: searchResult.BestFitness, Population: latestEvent.Population, StrategyRNG: latestEvent.StrategyRNG, SearchSpaceRNG: latestEvent.SearchSpaceRNG, ConfigJSON: string(configJSON)}
+	if searchResult != nil && searchResult.Cancelled && store != nil && len(safeCheckpointHistory) > len(resumeHistory) {
+		cp := storage.Checkpoint{Version: 1, Strategy: cfg.Search.Strategy, EvaluationNumber: len(safeCheckpointHistory), History: safeCheckpointHistory, BestFitness: latestSafeEvent.BestSoFar, Population: latestSafeEvent.Population, StrategyRNG: latestSafeEvent.StrategyRNG, SearchSpaceRNG: latestSafeEvent.SearchSpaceRNG, ConfigJSON: string(configJSON)}
 		if saveErr := store.SaveSearchCheckpoint(context.Background(), experimentID, cp); saveErr != nil {
 			logger.Warn("failed to save cancellation checkpoint", "error", saveErr)
 		}

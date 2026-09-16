@@ -283,6 +283,20 @@ func (s *SQLiteStorage) LoadLatestCheckpoint(ctx context.Context, experimentID s
 	if cp.Version != 1 {
 		return nil, fmt.Errorf("unsupported checkpoint version %d", cp.Version)
 	}
+	if cp.Strategy != "random" && cp.Strategy != "evolutionary" && cp.Strategy != "regularized" {
+		return nil, fmt.Errorf("invalid checkpoint strategy %q", cp.Strategy)
+	}
+	if cp.EvaluationNumber < 0 || cp.EvaluationNumber != len(cp.History) {
+		return nil, fmt.Errorf("inconsistent checkpoint evaluation number %d for history length %d", cp.EvaluationNumber, len(cp.History))
+	}
+	if cp.EvaluationNumber > 0 && cp.SearchSpaceRNG == 0 {
+		return nil, fmt.Errorf("checkpoint is missing search-space RNG state")
+	}
+	if (cp.Strategy == "evolutionary" || cp.Strategy == "regularized") && cp.EvaluationNumber > 0 {
+		if len(cp.Population) == 0 || cp.StrategyRNG == 0 {
+			return nil, fmt.Errorf("checkpoint is missing evolutionary population or RNG state")
+		}
+	}
 	return &cp, nil
 }
 

@@ -555,3 +555,61 @@ func TestEvolutionaryCancellationJoinsInflight(t *testing.T) {
 		t.Fatal("in-flight evaluators were not joined")
 	}
 }
+
+func TestRandomResumeContinuesCandidateSequence(t *testing.T) {
+	fullCfg := makeTestConfig()
+	fullCfg.MaxEvaluations = 6
+	fullCfg.NumWorkers = 1
+	full, err := NewRandomSearch(42).Search(context.Background(), fullCfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	partCfg := makeTestConfig()
+	partCfg.MaxEvaluations = 3
+	partCfg.NumWorkers = 1
+	var last EvaluationEvent
+	partCfg.OnEvaluation = func(event EvaluationEvent) { last = event }
+	part, err := NewRandomSearch(42).Search(context.Background(), partCfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resumeCfg := makeTestConfig()
+	resumeCfg.MaxEvaluations = 6
+	resumeCfg.NumWorkers = 1
+	resumeCfg.ResumeHistory = part.History
+	resumeCfg.ResumeSearchSpaceRNG = last.SearchSpaceRNG
+	resumed, err := NewRandomSearch(42).Search(context.Background(), resumeCfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := range full.History {
+		if full.History[i].Hash() != resumed.History[i].Hash() {
+			t.Fatalf("history differs at %d", i)
+		}
+	}
+}
+
+func TestEvolutionaryCheckpointSafeOnlyAtBatchBoundary(t *testing.T) {
+	cfg := makeTestConfig()
+	cfg.MaxEvaluations = 10
+	cfg.PopulationSize = 4
+	cfg.NumWorkers = 3
+	var safe []int
+	cfg.OnEvaluation = func(event EvaluationEvent) {
+		if event.CheckpointSafe {
+			safe = append(safe, event.EvaluationNumber)
+		}
+	}
+	if _, err := NewEvolutionarySearch(42).Search(context.Background(), cfg); err != nil {
+		t.Fatal(err)
+	}
+	want := []int{3, 4, 7, 10}
+	if len(safe) != len(want) {
+		t.Fatalf("safe points=%v want=%v", safe, want)
+	}
+	for i := range want {
+		if safe[i] != want[i] {
+			t.Fatalf("safe points=%v want=%v", safe, want)
+		}
+	}
+}

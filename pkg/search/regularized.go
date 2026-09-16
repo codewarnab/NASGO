@@ -133,9 +133,16 @@ func (r *RegularizedEvolution) Search(ctx context.Context, config SearchConfig) 
 		for i := range batch {
 			batch[i] = config.SearchSpace.SampleRandomArchitecture()
 		}
-		for _, o := range evaluateBatch(ctx, config.NumWorkers, batch, func(c context.Context, a *searchspace.Architecture) (float64, error) {
+		outcomes := evaluateBatch(ctx, config.NumWorkers, batch, func(c context.Context, a *searchspace.Architecture) (float64, error) {
 			return r.evaluateArch(c, config, a)
-		}) {
+		})
+		lastSuccessful := -1
+		for i, o := range outcomes {
+			if o.err == nil && o.arch != nil {
+				lastSuccessful = i
+			}
+		}
+		for outcomeIndex, o := range outcomes {
 			if o.err != nil || o.arch == nil {
 				continue
 			}
@@ -147,7 +154,7 @@ func (r *RegularizedEvolution) Search(ctx context.Context, config SearchConfig) 
 				for i, ind := range population {
 					pops[i] = ind.arch
 				}
-				config.OnEvaluation(EvaluationEvent{Architecture: o.arch, Fitness: o.fitness, EvaluationNumber: count, TotalEvaluations: config.MaxEvaluations, Duration: o.duration, BestSoFar: best, Generation: generation, Population: pops, StrategyRNG: r.rngSource.State, SearchSpaceRNG: config.SearchSpace.RNGState()})
+				config.OnEvaluation(EvaluationEvent{Architecture: o.arch, Fitness: o.fitness, EvaluationNumber: count, TotalEvaluations: config.MaxEvaluations, Duration: o.duration, BestSoFar: best, Generation: generation, Population: pops, StrategyRNG: r.rngSource.State, SearchSpaceRNG: config.SearchSpace.RNGState(), CheckpointSafe: outcomeIndex == lastSuccessful})
 			}
 		}
 	}
@@ -176,9 +183,16 @@ func (r *RegularizedEvolution) Search(ctx context.Context, config SearchConfig) 
 			batch[i] = config.SearchSpace.Mutate(parent.arch)
 			batch[i].Metadata.Generation = generation
 		}
-		for _, o := range evaluateBatch(ctx, config.NumWorkers, batch, func(c context.Context, a *searchspace.Architecture) (float64, error) {
+		outcomes := evaluateBatch(ctx, config.NumWorkers, batch, func(c context.Context, a *searchspace.Architecture) (float64, error) {
 			return r.evaluateArch(c, config, a)
-		}) {
+		})
+		lastSuccessful := -1
+		for i, o := range outcomes {
+			if o.err == nil && o.arch != nil {
+				lastSuccessful = i
+			}
+		}
+		for outcomeIndex, o := range outcomes {
 			if o.err != nil || o.arch == nil {
 				continue
 			}
@@ -193,7 +207,7 @@ func (r *RegularizedEvolution) Search(ctx context.Context, config SearchConfig) 
 				for i, ind := range population {
 					pops[i] = ind.arch
 				}
-				config.OnEvaluation(EvaluationEvent{Architecture: o.arch, Fitness: o.fitness, EvaluationNumber: count, TotalEvaluations: config.MaxEvaluations, Duration: o.duration, BestSoFar: best, Generation: generation, Population: pops, StrategyRNG: r.rngSource.State, SearchSpaceRNG: config.SearchSpace.RNGState()})
+				config.OnEvaluation(EvaluationEvent{Architecture: o.arch, Fitness: o.fitness, EvaluationNumber: count, TotalEvaluations: config.MaxEvaluations, Duration: o.duration, BestSoFar: best, Generation: generation, Population: pops, StrategyRNG: r.rngSource.State, SearchSpaceRNG: config.SearchSpace.RNGState(), CheckpointSafe: outcomeIndex == lastSuccessful})
 			}
 		}
 		generation++

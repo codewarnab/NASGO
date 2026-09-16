@@ -55,7 +55,7 @@ func TestCheckpointRoundTrip(t *testing.T) {
 	defer s.Close()
 	a := searchspace.DefaultSearchSpace().SampleRandomArchitecture()
 	a.Metadata.Fitness = .8
-	cp := Checkpoint{Version: 1, Strategy: "random", EvaluationNumber: 1, History: []*searchspace.Architecture{a}, BestFitness: .8}
+	cp := Checkpoint{Version: 1, Strategy: "random", EvaluationNumber: 1, History: []*searchspace.Architecture{a}, BestFitness: .8, SearchSpaceRNG: 22}
 	if err = s.SaveSearchCheckpoint(ctx, "e", cp); err != nil {
 		t.Fatal(err)
 	}
@@ -86,5 +86,25 @@ func TestCheckpointRoundTripIncludesExactResumeState(t *testing.T) {
 	}
 	if got.StrategyRNG != 11 || got.SearchSpaceRNG != 22 || len(got.Population) != 1 || got.ConfigJSON != "{}" {
 		t.Fatalf("incomplete checkpoint: %+v", got)
+	}
+}
+
+func TestCheckpointRejectsLogicalCorruption(t *testing.T) {
+	for _, cp := range []Checkpoint{
+		{Version: 1, Strategy: "random", EvaluationNumber: 2, History: nil, SearchSpaceRNG: 1},
+		{Version: 1, Strategy: "random", EvaluationNumber: 1, History: []*searchspace.Architecture{searchspace.DefaultSearchSpace().SampleRandomArchitecture()}},
+		{Version: 1, Strategy: "evolutionary", EvaluationNumber: 1, History: []*searchspace.Architecture{searchspace.DefaultSearchSpace().SampleRandomArchitecture()}, SearchSpaceRNG: 1},
+	} {
+		s, err := NewSQLiteStorage(filepath.Join(t.TempDir(), "bad.db"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := s.SaveSearchCheckpoint(context.Background(), "e", cp); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := s.LoadLatestCheckpoint(context.Background(), "e"); err == nil {
+			t.Fatalf("accepted corrupt checkpoint: %+v", cp)
+		}
+		_ = s.Close()
 	}
 }

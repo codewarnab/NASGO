@@ -136,6 +136,9 @@ type EvaluationEvent struct {
 	Population     []*searchspace.Architecture
 	StrategyRNG    uint64
 	SearchSpaceRNG uint64
+
+	// CheckpointSafe is true only when no generated batch work is pending.
+	CheckpointSafe bool
 }
 
 // SearchResult contains the outcome of a search run.

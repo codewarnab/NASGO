@@ -122,15 +122,25 @@ func (e *EvolutionarySearch) Search(ctx context.Context, config SearchConfig) (*
 			n = missing
 		}
 		batch := config.SearchSpace.PopulateInitial(n)
-		for _, o := range evaluateBatch(ctx, config.NumWorkers, batch, func(c context.Context, a *searchspace.Architecture) (float64, error) {
+		outcomes := evaluateBatch(ctx, config.NumWorkers, batch, func(c context.Context, a *searchspace.Architecture) (float64, error) {
 			return e.evaluateArch(c, config, a)
-		}) {
+		})
+		lastSuccessful := -1
+		for i, o := range outcomes {
+			if o.err == nil && o.arch != nil {
+				lastSuccessful = i
+			}
+		}
+		for outcomeIndex, o := range outcomes {
 			if o.err != nil || o.arch == nil {
 				failedInitializations++
 				continue
 			}
 			population = append(population, o.arch)
 			commit(o, 0)
+			if config.OnEvaluation != nil {
+				config.OnEvaluation(EvaluationEvent{Architecture: o.arch, Fitness: o.fitness, EvaluationNumber: evaluationCount, TotalEvaluations: config.MaxEvaluations, Duration: o.duration, BestSoFar: bestFitness, Generation: 0, Population: append([]*searchspace.Architecture(nil), population...), StrategyRNG: e.rngSource.State, SearchSpaceRNG: config.SearchSpace.RNGState(), CheckpointSafe: outcomeIndex == lastSuccessful})
+			}
 		}
 		if failedInitializations >= maxFailedInitializations && len(population) < config.PopulationSize {
 			return nil, fmt.Errorf("initializing population: evaluator failed %d candidates without filling population", failedInitializations)
@@ -163,9 +173,16 @@ func (e *EvolutionarySearch) Search(ctx context.Context, config SearchConfig) (*
 			batch[i] = config.SearchSpace.Mutate(parent)
 			batch[i].Metadata.Generation = generation
 		}
-		for _, o := range evaluateBatch(ctx, config.NumWorkers, batch, func(c context.Context, a *searchspace.Architecture) (float64, error) {
+		outcomes := evaluateBatch(ctx, config.NumWorkers, batch, func(c context.Context, a *searchspace.Architecture) (float64, error) {
 			return e.evaluateArch(c, config, a)
-		}) {
+		})
+		lastSuccessful := -1
+		for i, o := range outcomes {
+			if o.err == nil && o.arch != nil {
+				lastSuccessful = i
+			}
+		}
+		for outcomeIndex, o := range outcomes {
 			if o.err != nil || o.arch == nil {
 				continue
 			}
@@ -177,7 +194,7 @@ func (e *EvolutionarySearch) Search(ctx context.Context, config SearchConfig) (*
 				population[len(population)-1] = o.arch
 			}
 			if config.OnEvaluation != nil {
-				config.OnEvaluation(EvaluationEvent{Architecture: o.arch, Fitness: o.fitness, EvaluationNumber: evaluationCount, TotalEvaluations: config.MaxEvaluations, Duration: o.duration, BestSoFar: bestFitness, Generation: generation, Population: append([]*searchspace.Architecture(nil), population...), StrategyRNG: e.rngSource.State, SearchSpaceRNG: config.SearchSpace.RNGState()})
+				config.OnEvaluation(EvaluationEvent{Architecture: o.arch, Fitness: o.fitness, EvaluationNumber: evaluationCount, TotalEvaluations: config.MaxEvaluations, Duration: o.duration, BestSoFar: bestFitness, Generation: generation, Population: append([]*searchspace.Architecture(nil), population...), StrategyRNG: e.rngSource.State, SearchSpaceRNG: config.SearchSpace.RNGState(), CheckpointSafe: outcomeIndex == lastSuccessful})
 			}
 		}
 		generation++
