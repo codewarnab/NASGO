@@ -281,6 +281,54 @@ func TestRunSearchPeriodicCheckpointAndResume(t *testing.T) {
 	}
 }
 
+func TestRunSearchCheckpointsOnlyAtIntervalBoundaries(t *testing.T) {
+	for _, tc := range []struct {
+		name           string
+		maxEvaluations int
+		want           []int
+	}{
+		{name: "budget is a multiple of the interval", maxEvaluations: 100, want: []int{25, 50, 75, 100}},
+		{name: "budget past the last boundary adds nothing", maxEvaluations: 90, want: []int{25, 50, 75}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			db := filepath.Join(t.TempDir(), "interval.db")
+			configPath := writeResumeConfig(t, db, tc.maxEvaluations, 25)
+			if _, err := captureStdout(t, func() error { return runSearch([]string{"--config", configPath}) }); err != nil {
+				t.Fatal(err)
+			}
+			database, err := sql.Open("sqlite", db)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer database.Close()
+			rows, err := database.Query(`SELECT evaluation_number FROM checkpoints ORDER BY evaluation_number`)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer rows.Close()
+			var got []int
+			for rows.Next() {
+				var n int
+				if err := rows.Scan(&n); err != nil {
+					t.Fatal(err)
+				}
+				got = append(got, n)
+			}
+			if err := rows.Err(); err != nil {
+				t.Fatal(err)
+			}
+			if len(got) != len(tc.want) {
+				t.Fatalf("checkpoints at %v, want exactly %v", got, tc.want)
+			}
+			for i := range tc.want {
+				if got[i] != tc.want[i] {
+					t.Fatalf("checkpoints at %v, want exactly %v", got, tc.want)
+				}
+			}
+		})
+	}
+}
+
 func TestRunSearchResumeRejectsMissingAndCorruptCheckpoints(t *testing.T) {
 	db := filepath.Join(t.TempDir(), "invalid.db")
 	configPath := writeResumeConfig(t, db, 2, 1)
