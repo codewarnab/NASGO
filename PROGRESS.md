@@ -24,3 +24,9 @@ Run the fast validation suite with `go test ./...` or `go test -race ./...`. See
 - Integration coverage focuses on fast fixtures rather than CIFAR or GPU training. See [issue #1](https://github.com/codewarnab/NASGO/issues/1).
 
 The older implementation walkthrough in [NAS_GO_Implementation.md](NAS_GO_Implementation.md) explains architecture and original design intent. This page is the source of truth for current capability status.
+
+## Validation note
+
+The Go suite, race detector, vet, and Python syntax compile are validated in CI-compatible
+commands. The trainer image includes the pinned PyTorch dependencies and training script,
+but a real image build/smoke test still requires a host with Docker or another OCI runtime.
