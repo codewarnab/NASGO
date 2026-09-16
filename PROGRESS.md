@@ -1,52 +1,26 @@
-# NAS-Go Implementation Progress
+# Project status
 
-## Summary
+NASGO is an experimental neural architecture search toolkit. It is suitable for local experiments, test fixtures, and continued development. It is not presented as production-ready.
 
-- **Created:** 15 of 28 files
-- **Progress:** ~54%
+## Available today
 
----
+- CLI search and search-space inspection (`go run ./cmd/nas help`)
+- Configurable cell search space and eight operation types
+- Random, evolutionary, and regularized-evolution strategies
+- Proxy, Python trainer, and combined evaluators
+- SQLite experiment history and versioned checkpoints
+- Bounded random-search workers through `num_workers`
+- Pinned trainer-capable container dependencies
+- Go unit, integration, subprocess-protocol, race, lint, and cross-build CI
 
-## DONE
+Run the fast validation suite with `go test ./...` or `go test -race ./...`. See [TESTING.md](TESTING.md).
 
-| # | File | Status |
-|---|------|--------|
-| 1 | `go.mod` | Done |
-| 2 | `pkg/searchspace/operations.go` | Done |
-| 3 | `pkg/searchspace/cell.go` | Done |
-| 4 | `pkg/searchspace/architecture.go` | Done |
-| 5 | `pkg/searchspace/searchspace.go` | Done |
-| 6 | `pkg/search/strategy.go` | Done |
-| 7 | `pkg/search/random.go` | Done |
-| 8 | `pkg/search/evolutionary.go` | Done |
-| 9 | `pkg/search/regularized.go` | Done |
-| 10 | `pkg/evaluator/evaluator.go` | Done |
-| 11 | `pkg/evaluator/proxy.go` | Done |
-| 12 | `pkg/evaluator/trainer.go` | Done |
-| 13 | `pkg/utils/config.go` | Done |
-| 14 | `pkg/utils/logging.go` | Done |
-| 15 | `pkg/storage/sqlite.go` | Done |
+## Known limits and follow-up
 
-## TODO
+- The trainer image defaults to CPU dependencies; GPU training needs a CUDA-specific image and runtime. See [issue #2](https://github.com/codewarnab/NASGO/issues/2).
+- Environment configuration supports an explicit, documented subset of `NAS_` variables. See [issue #3](https://github.com/codewarnab/NASGO/issues/3) and [CONFIGURATION.md](CONFIGURATION.md).
+- Parallel workers currently apply to independent random-search batches; evolutionary strategies remain sequential. See [issue #4](https://github.com/codewarnab/NASGO/issues/4).
+- Resume supports random and evolutionary histories, but exact RNG continuation and regularized-evolution state are not yet preserved. See [issue #5](https://github.com/codewarnab/NASGO/issues/5) and [CHECKPOINTS.md](CHECKPOINTS.md).
+- Integration coverage focuses on fast fixtures rather than CIFAR or GPU training. See [issue #1](https://github.com/codewarnab/NASGO/issues/1).
 
-| # | File | Category |
-|---|------|----------|
-| 16 | `cmd/nas/main.go` | CLI entry point |
-| 17 | `scripts/train.py` | Python training script |
-| 18 | `configs/default.yaml` | Example config |
-| 19 | `pkg/searchspace/operations_test.go` | Tests |
-| 20 | `pkg/search/search_test.go` | Tests |
-| 21 | `Makefile` | Build automation |
-| 22 | `Dockerfile` | Containerization |
-| 23 | `.github/workflows/ci.yml` | CI/CD pipeline |
-| 24 | `.golangci.yml` | Linter config |
-| 25 | `README.md` | Documentation |
-| 26 | `examples/fast.yaml` | Example config |
-| 27 | `examples/production.yaml` | Example config |
-| 28 | `examples/combined.yaml` | Example config |
-
-## Still Needed
-
-- [ ] Run `go mod tidy` to download dependencies and generate `go.sum`
-- [ ] Run `go build ./...` to verify compilation
-- [ ] Run `go test ./...` after tests are created
+The older implementation walkthrough in [NAS_GO_Implementation.md](NAS_GO_Implementation.md) explains architecture and original design intent. This page is the source of truth for current capability status.
