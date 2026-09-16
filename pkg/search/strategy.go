@@ -86,6 +86,11 @@ type SearchConfig struct {
 
 	// ResumeHistory contains completed evaluations restored from a checkpoint.
 	ResumeHistory []*searchspace.Architecture `json:"-"`
+
+	// ResumePopulation preserves exact evolutionary population order.
+	ResumePopulation     []*searchspace.Architecture `json:"-"`
+	ResumeStrategyRNG    uint64                      `json:"-"`
+	ResumeSearchSpaceRNG uint64                      `json:"-"`
 }
 
 // EvaluatorFunc is a function type for evaluating architectures.
@@ -126,6 +131,11 @@ type EvaluationEvent struct {
 
 	// Generation for evolutionary methods (0 for random)
 	Generation int
+
+	// State required for an exact subsequent resume.
+	Population     []*searchspace.Architecture
+	StrategyRNG    uint64
+	SearchSpaceRNG uint64
 }
 
 // SearchResult contains the outcome of a search run.

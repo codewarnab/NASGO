@@ -5,6 +5,7 @@ import (
 	"math/rand"
 	"time"
 
+	"nas-go/pkg/rngstate"
 	"nas-go/pkg/searchspace"
 )
 
@@ -35,7 +36,8 @@ import (
 // Reference: Real et al., "Regularized Evolution for Image Classifier Architecture Search"
 // https://arxiv.org/abs/1802.01548
 type RegularizedEvolution struct {
-	rng *rand.Rand
+	rng       *rand.Rand
+	rngSource *rngstate.Source
 }
 
 // NewRegularizedEvolution creates a new regularized evolution strategy.
@@ -46,9 +48,8 @@ func NewRegularizedEvolution(seed int64) *RegularizedEvolution {
 	if seed == -1 {
 		seed = time.Now().UnixNano()
 	}
-	return &RegularizedEvolution{
-		rng: rand.New(rand.NewSource(seed)),
-	}
+	source := rngstate.New(seed)
+	return &RegularizedEvolution{rng: rand.New(source), rngSource: source}
 }
 
 // Name returns the strategy name.
@@ -71,11 +72,34 @@ func (r *RegularizedEvolution) Search(ctx context.Context, config SearchConfig) 
 	if config.Seed != -1 {
 		config.SearchSpace.SetSeed(config.Seed)
 	}
-	result := &SearchResult{History: make([]*searchspace.Architecture, 0, config.MaxEvaluations), StrategyName: r.Name()}
+	result := &SearchResult{History: append([]*searchspace.Architecture(nil), config.ResumeHistory...), StrategyName: r.Name()}
 	population := make([]*individual, 0, config.PopulationSize)
-	count, tick, generation := 0, 0, 0
+	for i, a := range config.ResumePopulation {
+		population = append(population, &individual{arch: a, addedAt: i, fitness: a.Metadata.Fitness})
+	}
+	if len(population) == 0 {
+		start := len(config.ResumeHistory) - config.PopulationSize
+		if start < 0 {
+			start = 0
+		}
+		for i, a := range config.ResumeHistory[start:] {
+			population = append(population, &individual{arch: a, addedAt: i, fitness: a.Metadata.Fitness})
+		}
+	}
+	if config.ResumeStrategyRNG != 0 {
+		r.rngSource.State = config.ResumeStrategyRNG
+	}
+	if config.ResumeSearchSpaceRNG != 0 {
+		config.SearchSpace.SetRNGState(config.ResumeSearchSpaceRNG)
+	}
+	count, tick, generation := len(config.ResumeHistory), len(population), 0
 	best := -1e9
 	var bestArch *searchspace.Architecture
+	for _, a := range config.ResumeHistory {
+		if a.Metadata.Fitness > best {
+			best, bestArch = a.Metadata.Fitness, a
+		}
+	}
 	finish := func(cancelled bool) (*SearchResult, error) {
 		out := r.buildResult(result, bestArch, best, count, generation, start, cancelled)
 		if cancelled {
@@ -89,9 +113,6 @@ func (r *RegularizedEvolution) Search(ctx context.Context, config SearchConfig) 
 		result.History = append(result.History, o.arch)
 		if o.fitness > best {
 			best, bestArch = o.fitness, o.arch
-		}
-		if config.OnEvaluation != nil {
-			config.OnEvaluation(EvaluationEvent{Architecture: o.arch, Fitness: o.fitness, EvaluationNumber: count, TotalEvaluations: config.MaxEvaluations, Duration: o.duration, BestSoFar: best, Generation: gen})
 		}
 	}
 	for len(population) < config.PopulationSize && count < config.MaxEvaluations {
@@ -121,6 +142,13 @@ func (r *RegularizedEvolution) Search(ctx context.Context, config SearchConfig) 
 			commit(o, 0)
 			population = append(population, &individual{arch: o.arch, addedAt: tick, fitness: o.fitness})
 			tick++
+			if config.OnEvaluation != nil {
+				pops := make([]*searchspace.Architecture, len(population))
+				for i, ind := range population {
+					pops[i] = ind.arch
+				}
+				config.OnEvaluation(EvaluationEvent{Architecture: o.arch, Fitness: o.fitness, EvaluationNumber: count, TotalEvaluations: config.MaxEvaluations, Duration: o.duration, BestSoFar: best, Generation: generation, Population: pops, StrategyRNG: r.rngSource.State, SearchSpaceRNG: config.SearchSpace.RNGState()})
+			}
 		}
 	}
 	generation = 1
@@ -160,6 +188,13 @@ func (r *RegularizedEvolution) Search(ctx context.Context, config SearchConfig) 
 			}
 			population = append(population, &individual{arch: o.arch, addedAt: tick, fitness: o.fitness})
 			tick++
+			if config.OnEvaluation != nil {
+				pops := make([]*searchspace.Architecture, len(population))
+				for i, ind := range population {
+					pops[i] = ind.arch
+				}
+				config.OnEvaluation(EvaluationEvent{Architecture: o.arch, Fitness: o.fitness, EvaluationNumber: count, TotalEvaluations: config.MaxEvaluations, Duration: o.duration, BestSoFar: best, Generation: generation, Population: pops, StrategyRNG: r.rngSource.State, SearchSpaceRNG: config.SearchSpace.RNGState()})
+			}
 		}
 		generation++
 	}

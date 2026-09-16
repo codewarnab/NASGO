@@ -3,6 +3,8 @@ package searchspace
 import (
 	"fmt"
 	"math/rand"
+
+	"nas-go/pkg/rngstate"
 )
 
 // SearchSpace defines the configuration for the neural architecture search space.
@@ -38,7 +40,8 @@ type SearchSpace struct {
 
 	// rng is the random number generator for sampling.
 	// Using a seeded RNG enables reproducibility.
-	rng *rand.Rand
+	rng       *rand.Rand
+	rngSource *rngstate.Source
 }
 
 // DefaultSearchSpace returns the default search space configuration.
@@ -46,13 +49,15 @@ type SearchSpace struct {
 //
 // Reference: DARTS paper, Section 3.1
 func DefaultSearchSpace() *SearchSpace {
-	return &SearchSpace{
+	s := &SearchSpace{
 		Operations:    DefaultOperations(),
 		NumNodes:      4,
 		NumInputNodes: 2,
 		EdgesPerNode:  2,
-		rng:           rand.New(rand.NewSource(42)),
+		rngSource:     rngstate.New(42),
 	}
+	s.rng = rand.New(s.rngSource)
+	return s
 }
 
 // NewSearchSpace creates a search space with custom configuration.
@@ -86,19 +91,31 @@ func NewSearchSpace(operations []OperationType, numNodes, numInputNodes, edgesPe
 		seed = rand.Int63()
 	}
 
-	return &SearchSpace{
+	s := &SearchSpace{
 		Operations:    operations,
 		NumNodes:      numNodes,
 		NumInputNodes: numInputNodes,
 		EdgesPerNode:  edgesPerNode,
-		rng:           rand.New(rand.NewSource(seed)),
-	}, nil
+		rngSource:     rngstate.New(seed),
+	}
+	s.rng = rand.New(s.rngSource)
+	return s, nil
 }
 
 // SetSeed resets the random number generator with a new seed.
 // Call this before sampling to ensure reproducibility.
 func (s *SearchSpace) SetSeed(seed int64) {
-	s.rng = rand.New(rand.NewSource(seed))
+	s.rngSource = rngstate.New(seed)
+	s.rng = rand.New(s.rngSource)
+}
+
+// RNGState returns the complete deterministic generator state.
+func (s *SearchSpace) RNGState() uint64 { return s.rngSource.State }
+
+// SetRNGState restores a generator state captured by RNGState.
+func (s *SearchSpace) SetRNGState(state uint64) {
+	s.rngSource = &rngstate.Source{State: state}
+	s.rng = rand.New(s.rngSource)
 }
 
 // Size returns the total number of possible architectures in this search space.

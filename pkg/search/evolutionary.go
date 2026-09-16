@@ -7,6 +7,7 @@ import (
 	"sort"
 	"time"
 
+	"nas-go/pkg/rngstate"
 	"nas-go/pkg/searchspace"
 )
 
@@ -30,7 +31,8 @@ import (
 // - Comparison baseline for regularized evolution
 // - Fast convergence is more important than exploration
 type EvolutionarySearch struct {
-	rng *rand.Rand
+	rng       *rand.Rand
+	rngSource *rngstate.Source
 }
 
 // NewEvolutionarySearch creates a new evolutionary search strategy.
@@ -41,9 +43,8 @@ func NewEvolutionarySearch(seed int64) *EvolutionarySearch {
 	if seed == -1 {
 		seed = time.Now().UnixNano()
 	}
-	return &EvolutionarySearch{
-		rng: rand.New(rand.NewSource(seed)),
-	}
+	source := rngstate.New(seed)
+	return &EvolutionarySearch{rng: rand.New(source), rngSource: source}
 }
 
 // Name returns the strategy name.
@@ -59,7 +60,16 @@ func (e *EvolutionarySearch) Search(ctx context.Context, config SearchConfig) (*
 		config.SearchSpace.SetSeed(config.Seed)
 	}
 	result := &SearchResult{History: append([]*searchspace.Architecture(nil), config.ResumeHistory...), StrategyName: e.Name()}
-	population := append([]*searchspace.Architecture(nil), config.ResumeHistory...)
+	population := append([]*searchspace.Architecture(nil), config.ResumePopulation...)
+	if len(population) == 0 {
+		population = append(population, config.ResumeHistory...)
+	}
+	if config.ResumeStrategyRNG != 0 {
+		e.rngSource.State = config.ResumeStrategyRNG
+	}
+	if config.ResumeSearchSpaceRNG != 0 {
+		config.SearchSpace.SetRNGState(config.ResumeSearchSpaceRNG)
+	}
 	if len(population) > config.PopulationSize {
 		population = population[len(population)-config.PopulationSize:]
 	}
@@ -88,9 +98,6 @@ func (e *EvolutionarySearch) Search(ctx context.Context, config SearchConfig) (*
 		result.History = append(result.History, o.arch)
 		if o.fitness > bestFitness {
 			bestFitness, bestArch = o.fitness, o.arch
-		}
-		if config.OnEvaluation != nil {
-			config.OnEvaluation(EvaluationEvent{Architecture: o.arch, Fitness: o.fitness, EvaluationNumber: evaluationCount, TotalEvaluations: config.MaxEvaluations, Duration: o.duration, BestSoFar: bestFitness, Generation: gen})
 		}
 	}
 
@@ -168,6 +175,9 @@ func (e *EvolutionarySearch) Search(ctx context.Context, config SearchConfig) (*
 				population = append(population, o.arch)
 			} else if o.fitness > population[len(population)-1].Metadata.Fitness {
 				population[len(population)-1] = o.arch
+			}
+			if config.OnEvaluation != nil {
+				config.OnEvaluation(EvaluationEvent{Architecture: o.arch, Fitness: o.fitness, EvaluationNumber: evaluationCount, TotalEvaluations: config.MaxEvaluations, Duration: o.duration, BestSoFar: bestFitness, Generation: generation, Population: append([]*searchspace.Architecture(nil), population...), StrategyRNG: e.rngSource.State, SearchSpaceRNG: config.SearchSpace.RNGState()})
 			}
 		}
 		generation++

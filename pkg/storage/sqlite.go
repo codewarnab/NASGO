@@ -247,6 +247,10 @@ type Checkpoint struct {
 	EvaluationNumber int                         `json:"evaluation_number"`
 	History          []*searchspace.Architecture `json:"history"`
 	BestFitness      float64                     `json:"best_fitness"`
+	Population       []*searchspace.Architecture `json:"population,omitempty"`
+	StrategyRNG      uint64                      `json:"strategy_rng,omitempty"`
+	SearchSpaceRNG   uint64                      `json:"search_space_rng,omitempty"`
+	ConfigJSON       string                      `json:"config_json,omitempty"`
 }
 
 // SaveSearchCheckpoint stores a complete versioned snapshot.

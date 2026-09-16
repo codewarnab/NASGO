@@ -67,3 +67,24 @@ func TestCheckpointRoundTrip(t *testing.T) {
 		t.Fatalf("got=%+v", got)
 	}
 }
+
+func TestCheckpointRoundTripIncludesExactResumeState(t *testing.T) {
+	s, err := NewSQLiteStorage(filepath.Join(t.TempDir(), "state.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	a := searchspace.DefaultSearchSpace().SampleRandomArchitecture()
+	a.Metadata.Fitness = 0.5
+	cp := Checkpoint{Version: 1, Strategy: "regularized", EvaluationNumber: 1, History: []*searchspace.Architecture{a}, Population: []*searchspace.Architecture{a}, StrategyRNG: 11, SearchSpaceRNG: 22, ConfigJSON: "{}"}
+	if err := s.SaveSearchCheckpoint(context.Background(), "exp", cp); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.LoadLatestCheckpoint(context.Background(), "exp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.StrategyRNG != 11 || got.SearchSpaceRNG != 22 || len(got.Population) != 1 || got.ConfigJSON != "{}" {
+		t.Fatalf("incomplete checkpoint: %+v", got)
+	}
+}
