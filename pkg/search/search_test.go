@@ -2,6 +2,7 @@ package search
 
 import (
 	"context"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -316,5 +317,35 @@ func TestAllStrategiesCompile(t *testing.T) {
 		if s.Name() == "" {
 			t.Error("strategy name should not be empty")
 		}
+	}
+}
+
+func TestRandomSearchUsesWorkersWithoutExceedingBudget(t *testing.T) {
+	space := searchspace.DefaultSearchSpace()
+	var current, peak int32
+	cfg := DefaultSearchConfig(space)
+	cfg.MaxEvaluations = 7
+	cfg.NumWorkers = 3
+	cfg.EvaluatorFunc = func(ctx context.Context, a *searchspace.Architecture) (float64, error) {
+		n := atomic.AddInt32(&current, 1)
+		for {
+			p := atomic.LoadInt32(&peak)
+			if n <= p || atomic.CompareAndSwapInt32(&peak, p, n) {
+				break
+			}
+		}
+		time.Sleep(10 * time.Millisecond)
+		atomic.AddInt32(&current, -1)
+		return 1, nil
+	}
+	result, err := NewRandomSearch(42).Search(context.Background(), cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.TotalEvaluations != 7 {
+		t.Fatalf("evaluations=%d", result.TotalEvaluations)
+	}
+	if peak < 2 {
+		t.Fatalf("peak concurrency=%d", peak)
 	}
 }
