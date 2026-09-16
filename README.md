@@ -19,7 +19,7 @@ go run ./cmd/nas search --config examples/fast.yaml
 - YAML, documented environment overrides, and CLI precedence
 - Cross-platform Go builds and a trainer-capable container
 
-See [PROGRESS.md](PROGRESS.md) for current status and limitations, [TESTING.md](TESTING.md) for validation, [CONFIGURATION.md](CONFIGURATION.md) for precedence, and [CHECKPOINTS.md](CHECKPOINTS.md) for resume behavior.
+See [PROGRESS.md](PROGRESS.md) for current status and limitations, [TESTING.md](TESTING.md) for automated testing, [VALIDATION.md](VALIDATION.md) for the latest bounded end-to-end results, [CONFIGURATION.md](CONFIGURATION.md) for precedence, and [CHECKPOINTS.md](CHECKPOINTS.md) for resume behavior.
 
 ## Container
 
