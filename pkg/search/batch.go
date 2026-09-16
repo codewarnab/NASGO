@@ -25,6 +25,9 @@ func evaluateBatch(ctx context.Context, workers int, arches []*searchspace.Archi
 		workers = len(arches)
 	}
 	outcomes := make([]batchOutcome, len(arches))
+	for i, arch := range arches {
+		outcomes[i] = batchOutcome{arch: arch, err: context.Canceled}
+	}
 	jobs := make(chan int)
 	var wg sync.WaitGroup
 	for w := 0; w < workers; w++ {

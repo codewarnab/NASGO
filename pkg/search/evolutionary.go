@@ -2,6 +2,7 @@ package search
 
 import (
 	"context"
+	"fmt"
 	"math/rand"
 	"sort"
 	"time"
@@ -97,6 +98,11 @@ func (e *EvolutionarySearch) Search(ctx context.Context, config SearchConfig) (*
 	if remaining := config.MaxEvaluations - evaluationCount; missing > remaining {
 		missing = remaining
 	}
+	failedInitializations := 0
+	maxFailedInitializations := config.PopulationSize * 3
+	if maxFailedInitializations < config.NumWorkers {
+		maxFailedInitializations = config.NumWorkers
+	}
 	for missing > 0 {
 		if ctx.Err() != nil {
 			return finish(true)
@@ -112,10 +118,15 @@ func (e *EvolutionarySearch) Search(ctx context.Context, config SearchConfig) (*
 		for _, o := range evaluateBatch(ctx, config.NumWorkers, batch, func(c context.Context, a *searchspace.Architecture) (float64, error) {
 			return e.evaluateArch(c, config, a)
 		}) {
-			if o.err == nil {
-				population = append(population, o.arch)
-				commit(o, 0)
+			if o.err != nil || o.arch == nil {
+				failedInitializations++
+				continue
 			}
+			population = append(population, o.arch)
+			commit(o, 0)
+		}
+		if failedInitializations >= maxFailedInitializations && len(population) < config.PopulationSize {
+			return nil, fmt.Errorf("initializing population: evaluator failed %d candidates without filling population", failedInitializations)
 		}
 		missing = config.PopulationSize - len(population)
 		if remaining := config.MaxEvaluations - evaluationCount; missing > remaining {
@@ -148,7 +159,7 @@ func (e *EvolutionarySearch) Search(ctx context.Context, config SearchConfig) (*
 		for _, o := range evaluateBatch(ctx, config.NumWorkers, batch, func(c context.Context, a *searchspace.Architecture) (float64, error) {
 			return e.evaluateArch(c, config, a)
 		}) {
-			if o.err != nil {
+			if o.err != nil || o.arch == nil {
 				continue
 			}
 			commit(o, generation)

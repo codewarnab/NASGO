@@ -115,7 +115,7 @@ func (r *RegularizedEvolution) Search(ctx context.Context, config SearchConfig) 
 		for _, o := range evaluateBatch(ctx, config.NumWorkers, batch, func(c context.Context, a *searchspace.Architecture) (float64, error) {
 			return r.evaluateArch(c, config, a)
 		}) {
-			if o.err != nil {
+			if o.err != nil || o.arch == nil {
 				continue
 			}
 			commit(o, 0)
@@ -151,7 +151,7 @@ func (r *RegularizedEvolution) Search(ctx context.Context, config SearchConfig) 
 		for _, o := range evaluateBatch(ctx, config.NumWorkers, batch, func(c context.Context, a *searchspace.Architecture) (float64, error) {
 			return r.evaluateArch(c, config, a)
 		}) {
-			if o.err != nil {
+			if o.err != nil || o.arch == nil {
 				continue
 			}
 			commit(o, generation)

@@ -146,3 +146,22 @@ func TestTrainerMalformedSubprocessOutput(t *testing.T) {
 		t.Fatalf("unexpected malformed-output error: %v", err)
 	}
 }
+
+func TestTrainerArchitectureFilesAreUnique(t *testing.T) {
+	dir := t.TempDir()
+	tr := &TrainerEvaluator{config: TrainerConfig{TempDir: dir}}
+	arch := testArch()
+	first, err := tr.writeArchitecture(arch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.Remove(first)
+	second, err := tr.writeArchitecture(arch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.Remove(second)
+	if first == second {
+		t.Fatalf("temp paths collided: %s", first)
+	}
+}
