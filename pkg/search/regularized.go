@@ -64,166 +64,106 @@ type individual struct {
 	fitness float64
 }
 
-// Search runs regularized evolution on the given search space.
-//
-// The algorithm maintains a fixed-size population. Each step:
-// 1. Tournament selection from random sample
-// 2. Mutate winner to create child
-// 3. Evaluate child
-// 4. Remove oldest (not worst!) individual
-// 5. Add child to population
-//
-// This aging mechanism is what makes it "regularized" - it prevents
-// any single individual from dominating the population forever.
+// Search runs regularized evolution with bounded parallel evaluation batches.
+// Selection and population commits remain ordered, preserving aging semantics.
 func (r *RegularizedEvolution) Search(ctx context.Context, config SearchConfig) (*SearchResult, error) {
-	startTime := time.Now()
-
-	// Seed the search space
+	start := time.Now()
 	if config.Seed != -1 {
 		config.SearchSpace.SetSeed(config.Seed)
 	}
-
-	result := &SearchResult{
-		History:      make([]*searchspace.Architecture, 0, config.MaxEvaluations),
-		StrategyName: r.Name(),
-	}
-
-	// Initialize population as a slice (FIFO for aging)
-	// We use a slice instead of a queue structure for simplicity
-	// The oldest individual is at index 0, newest at the end
+	result := &SearchResult{History: make([]*searchspace.Architecture, 0, config.MaxEvaluations), StrategyName: r.Name()}
 	population := make([]*individual, 0, config.PopulationSize)
-
-	evaluationCount := 0
-	var bestFitness float64 = -1e9
+	count, tick, generation := 0, 0, 0
+	best := -1e9
 	var bestArch *searchspace.Architecture
-	tick := 0 // Monotonic counter for aging
-
-	// Phase 1: Initialize population with random architectures
-	for len(population) < config.PopulationSize && evaluationCount < config.MaxEvaluations {
-		// Check for cancellation
-		select {
-		case <-ctx.Done():
-			return r.buildResult(result, bestArch, bestFitness, evaluationCount, 0, startTime, true), ctx.Err()
-		default:
+	finish := func(cancelled bool) (*SearchResult, error) {
+		out := r.buildResult(result, bestArch, best, count, generation, start, cancelled)
+		if cancelled {
+			return out, ctx.Err()
 		}
-
-		arch := config.SearchSpace.SampleRandomArchitecture()
-		arch.Metadata.Generation = 0
-
-		fitness, err := r.evaluateArch(ctx, config, arch)
-		if err != nil {
-			continue
+		return out, nil
+	}
+	commit := func(o batchOutcome, gen int) {
+		o.arch.Metadata.Fitness, o.arch.Metadata.EvaluationTime = o.fitness, o.duration
+		count++
+		result.History = append(result.History, o.arch)
+		if o.fitness > best {
+			best, bestArch = o.fitness, o.arch
 		}
-
-		evaluationCount++
-		result.History = append(result.History, arch)
-
-		// Add to population
-		ind := &individual{
-			arch:    arch,
-			addedAt: tick,
-			fitness: fitness,
-		}
-		population = append(population, ind)
-		tick++
-
-		// Track best
-		if fitness > bestFitness {
-			bestFitness = fitness
-			bestArch = arch
-		}
-
 		if config.OnEvaluation != nil {
-			config.OnEvaluation(EvaluationEvent{
-				Architecture:     arch,
-				Fitness:          fitness,
-				EvaluationNumber: evaluationCount,
-				TotalEvaluations: config.MaxEvaluations,
-				Duration:         arch.Metadata.EvaluationTime,
-				BestSoFar:        bestFitness,
-				Generation:       0,
-			})
+			config.OnEvaluation(EvaluationEvent{Architecture: o.arch, Fitness: o.fitness, EvaluationNumber: count, TotalEvaluations: config.MaxEvaluations, Duration: o.duration, BestSoFar: best, Generation: gen})
 		}
 	}
-
-	// Phase 2: Evolution with aging
-	generation := 1
-	for evaluationCount < config.MaxEvaluations {
-		// Check for cancellation
-		select {
-		case <-ctx.Done():
-			return r.buildResult(result, bestArch, bestFitness, evaluationCount, generation, startTime, true), ctx.Err()
-		default:
+	for len(population) < config.PopulationSize && count < config.MaxEvaluations {
+		if ctx.Err() != nil {
+			return finish(true)
 		}
-
-		// === TOURNAMENT SELECTION ===
-		// Sample random subset of population
-		sampleSize := config.TournamentSize
-		if sampleSize > len(population) {
-			sampleSize = len(population)
+		n := config.NumWorkers
+		if n < 1 {
+			n = 1
 		}
-		if sampleSize < 1 {
-			sampleSize = 1
+		if rem := config.PopulationSize - len(population); n > rem {
+			n = rem
 		}
-
-		// Random sample without replacement
-		sample := r.randomSample(population, sampleSize)
-
-		// Select best from sample (tournament winner)
-		parent := r.selectBest(sample)
-
-		// === MUTATION ===
-		child := config.SearchSpace.Mutate(parent.arch)
-		child.Metadata.Generation = generation
-
-		// === EVALUATION ===
-		fitness, err := r.evaluateArch(ctx, config, child)
-		if err != nil {
-			continue
+		if rem := config.MaxEvaluations - count; n > rem {
+			n = rem
 		}
-
-		evaluationCount++
-		result.History = append(result.History, child)
-
-		// === AGING: REMOVE OLDEST ===
-		// This is the key innovation of regularized evolution!
-		// We remove the oldest individual, NOT the worst.
-		// The oldest is at index 0 (FIFO order).
-		if len(population) >= config.PopulationSize {
-			population = population[1:] // Remove oldest (front of slice)
+		batch := make([]*searchspace.Architecture, n)
+		for i := range batch {
+			batch[i] = config.SearchSpace.SampleRandomArchitecture()
 		}
-
-		// === ADD CHILD ===
-		childInd := &individual{
-			arch:    child,
-			addedAt: tick,
-			fitness: fitness,
+		for _, o := range evaluateBatch(ctx, config.NumWorkers, batch, func(c context.Context, a *searchspace.Architecture) (float64, error) {
+			return r.evaluateArch(c, config, a)
+		}) {
+			if o.err != nil {
+				continue
+			}
+			commit(o, 0)
+			population = append(population, &individual{arch: o.arch, addedAt: tick, fitness: o.fitness})
+			tick++
 		}
-		population = append(population, childInd)
-		tick++
-
-		// Track best overall (not just in population)
-		if fitness > bestFitness {
-			bestFitness = fitness
-			bestArch = child
+	}
+	generation = 1
+	for count < config.MaxEvaluations {
+		if ctx.Err() != nil {
+			return finish(true)
 		}
-
-		if config.OnEvaluation != nil {
-			config.OnEvaluation(EvaluationEvent{
-				Architecture:     child,
-				Fitness:          fitness,
-				EvaluationNumber: evaluationCount,
-				TotalEvaluations: config.MaxEvaluations,
-				Duration:         child.Metadata.EvaluationTime,
-				BestSoFar:        bestFitness,
-				Generation:       generation,
-			})
+		n := config.NumWorkers
+		if n < 1 {
+			n = 1
 		}
-
+		if rem := config.MaxEvaluations - count; n > rem {
+			n = rem
+		}
+		batch := make([]*searchspace.Architecture, n)
+		for i := range batch {
+			sampleSize := config.TournamentSize
+			if sampleSize > len(population) {
+				sampleSize = len(population)
+			}
+			if sampleSize < 1 {
+				sampleSize = 1
+			}
+			parent := r.selectBest(r.randomSample(population, sampleSize))
+			batch[i] = config.SearchSpace.Mutate(parent.arch)
+			batch[i].Metadata.Generation = generation
+		}
+		for _, o := range evaluateBatch(ctx, config.NumWorkers, batch, func(c context.Context, a *searchspace.Architecture) (float64, error) {
+			return r.evaluateArch(c, config, a)
+		}) {
+			if o.err != nil {
+				continue
+			}
+			commit(o, generation)
+			if len(population) >= config.PopulationSize {
+				population = population[1:]
+			}
+			population = append(population, &individual{arch: o.arch, addedAt: tick, fitness: o.fitness})
+			tick++
+		}
 		generation++
 	}
-
-	return r.buildResult(result, bestArch, bestFitness, evaluationCount, generation, startTime, false), nil
+	return finish(false)
 }
 
 // randomSample returns a random sample of size k from the population.
