@@ -440,3 +440,176 @@ func TestEvolutionaryInitializationPersistentErrorsAreBounded(t *testing.T) {
 		t.Fatalf("unbounded evaluator calls: %d", calls)
 	}
 }
+
+func TestRandomSearchResumeDoesNotReevaluateHistory(t *testing.T) {
+	space := searchspace.DefaultSearchSpace()
+	done := space.SampleRandomArchitecture()
+	done.Metadata.Fitness = 2
+	var calls int32
+	cfg := DefaultSearchConfig(space)
+	cfg.MaxEvaluations = 3
+	cfg.ResumeHistory = []*searchspace.Architecture{done}
+	cfg.EvaluatorFunc = func(context.Context, *searchspace.Architecture) (float64, error) {
+		atomic.AddInt32(&calls, 1)
+		return 1, nil
+	}
+	r, err := NewRandomSearch(42).Search(context.Background(), cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if calls != 2 || r.TotalEvaluations != 3 || r.BestArchitecture.ID != done.ID {
+		t.Fatalf("calls=%d result=%+v", calls, r)
+	}
+}
+func TestEvolutionaryResumeDoesNotReevaluateHistory(t *testing.T) {
+	space := searchspace.DefaultSearchSpace()
+	done := space.SampleRandomArchitecture()
+	done.Metadata.Fitness = 2
+	var calls int32
+	cfg := DefaultSearchConfig(space)
+	cfg.PopulationSize = 2
+	cfg.MaxEvaluations = 3
+	cfg.ResumeHistory = []*searchspace.Architecture{done}
+	cfg.EvaluatorFunc = func(context.Context, *searchspace.Architecture) (float64, error) {
+		atomic.AddInt32(&calls, 1)
+		return 1, nil
+	}
+	r, err := NewEvolutionarySearch(42).Search(context.Background(), cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if calls != 2 || r.TotalEvaluations != 3 {
+		t.Fatalf("calls=%d result=%+v", calls, r)
+	}
+}
+
+func TestEvolutionaryResumeIsExact(t *testing.T) {
+	fullCfg := makeTestConfig()
+	fullCfg.MaxEvaluations = 18
+	fullCfg.PopulationSize = 6
+	fullCfg.NumWorkers = 3
+	full, _ := NewEvolutionarySearch(42).Search(context.Background(), fullCfg)
+	partCfg := fullCfg
+	partCfg.MaxEvaluations = 9
+	var last EvaluationEvent
+	partCfg.OnEvaluation = func(e EvaluationEvent) { last = e }
+	part, _ := NewEvolutionarySearch(42).Search(context.Background(), partCfg)
+	resumeCfg := fullCfg
+	resumeCfg.ResumeHistory = part.History
+	resumeCfg.ResumePopulation = last.Population
+	resumeCfg.ResumeStrategyRNG = last.StrategyRNG
+	resumeCfg.ResumeSearchSpaceRNG = last.SearchSpaceRNG
+	resumed, _ := NewEvolutionarySearch(42).Search(context.Background(), resumeCfg)
+	if len(resumed.History) != len(full.History) {
+		t.Fatalf("history lengths differ")
+	}
+	for i := range full.History {
+		if full.History[i].Hash() != resumed.History[i].Hash() {
+			t.Fatalf("history differs at %d", i)
+		}
+	}
+}
+
+func TestRegularizedResumeIsExact(t *testing.T) {
+	fullCfg := makeTestConfig()
+	fullCfg.MaxEvaluations = 18
+	fullCfg.PopulationSize = 6
+	fullCfg.NumWorkers = 3
+	full, _ := NewRegularizedEvolution(42).Search(context.Background(), fullCfg)
+	partCfg := fullCfg
+	partCfg.MaxEvaluations = 9
+	var last EvaluationEvent
+	partCfg.OnEvaluation = func(e EvaluationEvent) { last = e }
+	part, _ := NewRegularizedEvolution(42).Search(context.Background(), partCfg)
+	resumeCfg := fullCfg
+	resumeCfg.ResumeHistory = part.History
+	resumeCfg.ResumePopulation = last.Population
+	resumeCfg.ResumeStrategyRNG = last.StrategyRNG
+	resumeCfg.ResumeSearchSpaceRNG = last.SearchSpaceRNG
+	resumed, _ := NewRegularizedEvolution(42).Search(context.Background(), resumeCfg)
+	if len(resumed.History) != len(full.History) {
+		t.Fatalf("history lengths differ")
+	}
+	for i := range full.History {
+		if full.History[i].Hash() != resumed.History[i].Hash() {
+			t.Fatalf("history differs at %d", i)
+		}
+	}
+}
+
+func TestEvolutionaryCancellationJoinsInflight(t *testing.T) {
+	cfg := makeTestConfig()
+	cfg.MaxEvaluations = 100
+	cfg.NumWorkers = 4
+	var current int32
+	cfg.EvaluatorFunc = func(ctx context.Context, a *searchspace.Architecture) (float64, error) {
+		atomic.AddInt32(&current, 1)
+		defer atomic.AddInt32(&current, -1)
+		<-ctx.Done()
+		return 0, ctx.Err()
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() { time.Sleep(10 * time.Millisecond); cancel() }()
+	_, _ = NewEvolutionarySearch(42).Search(ctx, cfg)
+	if atomic.LoadInt32(&current) != 0 {
+		t.Fatal("in-flight evaluators were not joined")
+	}
+}
+
+func TestRandomResumeContinuesCandidateSequence(t *testing.T) {
+	fullCfg := makeTestConfig()
+	fullCfg.MaxEvaluations = 6
+	fullCfg.NumWorkers = 1
+	full, err := NewRandomSearch(42).Search(context.Background(), fullCfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	partCfg := makeTestConfig()
+	partCfg.MaxEvaluations = 3
+	partCfg.NumWorkers = 1
+	var last EvaluationEvent
+	partCfg.OnEvaluation = func(event EvaluationEvent) { last = event }
+	part, err := NewRandomSearch(42).Search(context.Background(), partCfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resumeCfg := makeTestConfig()
+	resumeCfg.MaxEvaluations = 6
+	resumeCfg.NumWorkers = 1
+	resumeCfg.ResumeHistory = part.History
+	resumeCfg.ResumeSearchSpaceRNG = last.SearchSpaceRNG
+	resumed, err := NewRandomSearch(42).Search(context.Background(), resumeCfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := range full.History {
+		if full.History[i].Hash() != resumed.History[i].Hash() {
+			t.Fatalf("history differs at %d", i)
+		}
+	}
+}
+
+func TestEvolutionaryCheckpointSafeOnlyAtBatchBoundary(t *testing.T) {
+	cfg := makeTestConfig()
+	cfg.MaxEvaluations = 10
+	cfg.PopulationSize = 4
+	cfg.NumWorkers = 3
+	var safe []int
+	cfg.OnEvaluation = func(event EvaluationEvent) {
+		if event.CheckpointSafe {
+			safe = append(safe, event.EvaluationNumber)
+		}
+	}
+	if _, err := NewEvolutionarySearch(42).Search(context.Background(), cfg); err != nil {
+		t.Fatal(err)
+	}
+	want := []int{3, 4, 7, 10}
+	if len(safe) != len(want) {
+		t.Fatalf("safe points=%v want=%v", safe, want)
+	}
+	for i := range want {
+		if safe[i] != want[i] {
+			t.Fatalf("safe points=%v want=%v", safe, want)
+		}
+	}
+}

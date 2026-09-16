@@ -73,15 +73,24 @@ func (r *RandomSearch) Search(ctx context.Context, config SearchConfig) (*Search
 	if config.Seed != -1 {
 		config.SearchSpace.SetSeed(config.Seed)
 	}
-	result := &SearchResult{History: make([]*searchspace.Architecture, 0, config.MaxEvaluations), StrategyName: r.Name()}
+	if config.ResumeSearchSpaceRNG != 0 {
+		config.SearchSpace.SetRNGState(config.ResumeSearchSpaceRNG)
+	}
+	result := &SearchResult{History: append([]*searchspace.Architecture(nil), config.ResumeHistory...), StrategyName: r.Name()}
 	bestFitness := -1e9
 	var bestArch *searchspace.Architecture
+	for _, arch := range result.History {
+		if arch.Metadata.Fitness > bestFitness {
+			bestFitness = arch.Metadata.Fitness
+			bestArch = arch
+		}
+	}
 	workers := config.NumWorkers
 	if workers < 1 {
 		workers = 1
 	}
 
-	for offset := 0; offset < config.MaxEvaluations; {
+	for offset := len(result.History); offset < config.MaxEvaluations; {
 		select {
 		case <-ctx.Done():
 			result.Cancelled = true
@@ -128,6 +137,12 @@ func (r *RandomSearch) Search(ctx context.Context, config SearchConfig) (*Search
 		for o := range outcomes {
 			ordered[o.index] = o
 		}
+		lastSuccessful := -1
+		for i, o := range ordered {
+			if o.err == nil {
+				lastSuccessful = i
+			}
+		}
 		for i, o := range ordered {
 			if o.err != nil {
 				continue
@@ -141,7 +156,7 @@ func (r *RandomSearch) Search(ctx context.Context, config SearchConfig) (*Search
 				bestArch = arch
 			}
 			if config.OnEvaluation != nil {
-				config.OnEvaluation(EvaluationEvent{Architecture: arch, Fitness: o.fitness, EvaluationNumber: offset + i + 1, TotalEvaluations: config.MaxEvaluations, Duration: o.duration, BestSoFar: bestFitness, Generation: 0})
+				config.OnEvaluation(EvaluationEvent{Architecture: arch, Fitness: o.fitness, EvaluationNumber: len(result.History), TotalEvaluations: config.MaxEvaluations, Duration: o.duration, BestSoFar: bestFitness, Generation: 0, SearchSpaceRNG: config.SearchSpace.RNGState(), CheckpointSafe: i == lastSuccessful})
 			}
 		}
 		offset += batchSize

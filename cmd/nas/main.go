@@ -84,6 +84,12 @@ Use "nas <command> -h" for more information about a command.`)
 
 // runSearch executes the architecture search.
 func runSearch(args []string) error {
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+	return runSearchContext(ctx, args)
+}
+
+func runSearchContext(ctx context.Context, args []string) error {
 	// Parse flags
 	fs := flag.NewFlagSet("search", flag.ContinueOnError)
 	configPath := fs.String("config", "", "Path to YAML config file")
@@ -97,6 +103,7 @@ func runSearch(args []string) error {
 	dbPath := fs.String("db", "", "SQLite database path")
 	logLevel := fs.String("log-level", "", "Log level: debug, info, warn, error")
 	outputJSON := fs.Bool("json", false, "Output results as JSON")
+	resumeID := fs.String("resume", "", "Resume an experiment from its latest checkpoint")
 
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -190,7 +197,41 @@ func runSearch(args []string) error {
 
 	// Create experiment record
 	experimentID := uuid.New().String()
-	if store != nil {
+	var resumeHistory []*searchspace.Architecture
+	if *resumeID != "" {
+		if store == nil {
+			return fmt.Errorf("--resume requires sqlite storage")
+		}
+		exp, err := store.GetExperiment(context.Background(), *resumeID)
+		if err != nil {
+			return fmt.Errorf("loading experiment: %w", err)
+		}
+		if exp == nil {
+			return fmt.Errorf("experiment %s not found", *resumeID)
+		}
+		if exp.Strategy != cfg.Search.Strategy {
+			return fmt.Errorf("resume strategy mismatch: checkpoint uses %s", exp.Strategy)
+		}
+		cp, err := store.LoadLatestCheckpoint(context.Background(), *resumeID)
+		if err != nil {
+			return err
+		}
+		if cp == nil {
+			return fmt.Errorf("no checkpoint found for experiment %s", *resumeID)
+		}
+		if cp.Strategy != cfg.Search.Strategy {
+			return fmt.Errorf("checkpoint strategy mismatch: %s", cp.Strategy)
+		}
+		if cp.ConfigJSON != "" {
+			current, _ := cfg.ToJSON()
+			if cp.ConfigJSON != string(current) {
+				return fmt.Errorf("checkpoint configuration is incompatible with current configuration")
+			}
+		}
+		resumeHistory = cp.History
+		experimentID = *resumeID
+	}
+	if store != nil && *resumeID == "" {
 		configJSON, _ := cfg.ToJSON()
 		exp := storage.Experiment{
 			ID:          experimentID,
@@ -212,6 +253,16 @@ func runSearch(args []string) error {
 	}
 
 	// Configure search
+	checkpointHistory := append([]*searchspace.Architecture(nil), resumeHistory...)
+	var latestSafeEvent search.EvaluationEvent
+	safeCheckpointHistory := append([]*searchspace.Architecture(nil), resumeHistory...)
+	var resumePopulation []*searchspace.Architecture
+	var resumeStrategyRNG, resumeSearchSpaceRNG uint64
+	if *resumeID != "" {
+		cp, _ := store.LoadLatestCheckpoint(context.Background(), *resumeID)
+		resumePopulation, resumeStrategyRNG, resumeSearchSpaceRNG = cp.Population, cp.StrategyRNG, cp.SearchSpaceRNG
+	}
+	configJSON, _ := cfg.ToJSON()
 	searchCfg := search.SearchConfig{
 		SearchSpace:    space,
 		MaxEvaluations: cfg.Search.MaxEvaluations,
@@ -226,8 +277,22 @@ func runSearch(args []string) error {
 			}
 			return result.Fitness, nil
 		},
+		ResumeHistory:        resumeHistory,
+		ResumePopulation:     resumePopulation,
+		ResumeStrategyRNG:    resumeStrategyRNG,
+		ResumeSearchSpaceRNG: resumeSearchSpaceRNG,
 		OnEvaluation: func(event search.EvaluationEvent) {
 			// Log progress
+			checkpointHistory = append(checkpointHistory, event.Architecture)
+			if event.CheckpointSafe {
+				latestSafeEvent = event
+				safeCheckpointHistory = append([]*searchspace.Architecture(nil), checkpointHistory...)
+			}
+			if store != nil && cfg.Storage.CheckpointInterval > 0 && event.CheckpointSafe && event.EvaluationNumber >= cfg.Storage.CheckpointInterval {
+				if err := store.SaveSearchCheckpoint(context.Background(), experimentID, storage.Checkpoint{Version: 1, Strategy: cfg.Search.Strategy, EvaluationNumber: event.EvaluationNumber, History: safeCheckpointHistory, BestFitness: event.BestSoFar, Population: event.Population, StrategyRNG: event.StrategyRNG, SearchSpaceRNG: event.SearchSpaceRNG, ConfigJSON: string(configJSON)}); err != nil {
+					logger.Warn("failed to save checkpoint", "error", err)
+				}
+			}
 			if event.EvaluationNumber%100 == 0 || event.EvaluationNumber == 1 {
 				logger.Progress(event.EvaluationNumber, event.TotalEvaluations, event.BestSoFar)
 			}
@@ -240,18 +305,6 @@ func runSearch(args []string) error {
 		},
 	}
 
-	// Setup graceful shutdown
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
-	go func() {
-		sig := <-sigCh
-		logger.Info("received signal, shutting down gracefully", "signal", sig)
-		cancel()
-	}()
-
 	// Run search
 	fmt.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
 	fmt.Printf("  NAS Search: %s\n", searcher.Name())
@@ -261,7 +314,13 @@ func runSearch(args []string) error {
 	fmt.Println()
 
 	searchResult, err := searcher.Search(ctx, searchCfg)
-	if err != nil && !searchResult.Cancelled {
+	if searchResult != nil && searchResult.Cancelled && store != nil && len(safeCheckpointHistory) > len(resumeHistory) {
+		cp := storage.Checkpoint{Version: 1, Strategy: cfg.Search.Strategy, EvaluationNumber: len(safeCheckpointHistory), History: safeCheckpointHistory, BestFitness: latestSafeEvent.BestSoFar, Population: latestSafeEvent.Population, StrategyRNG: latestSafeEvent.StrategyRNG, SearchSpaceRNG: latestSafeEvent.SearchSpaceRNG, ConfigJSON: string(configJSON)}
+		if saveErr := store.SaveSearchCheckpoint(context.Background(), experimentID, cp); saveErr != nil {
+			logger.Warn("failed to save cancellation checkpoint", "error", saveErr)
+		}
+	}
+	if err != nil && (searchResult == nil || !searchResult.Cancelled) {
 		return fmt.Errorf("search failed: %w", err)
 	}
 

@@ -83,6 +83,14 @@ type SearchConfig struct {
 	// Useful for logging, checkpointing, or early stopping.
 	// Can be nil.
 	OnEvaluation EvaluationCallback `json:"-"`
+
+	// ResumeHistory contains completed evaluations restored from a checkpoint.
+	ResumeHistory []*searchspace.Architecture `json:"-"`
+
+	// ResumePopulation preserves exact evolutionary population order.
+	ResumePopulation     []*searchspace.Architecture `json:"-"`
+	ResumeStrategyRNG    uint64                      `json:"-"`
+	ResumeSearchSpaceRNG uint64                      `json:"-"`
 }
 
 // EvaluatorFunc is a function type for evaluating architectures.
@@ -123,6 +131,14 @@ type EvaluationEvent struct {
 
 	// Generation for evolutionary methods (0 for random)
 	Generation int
+
+	// State required for an exact subsequent resume.
+	Population     []*searchspace.Architecture
+	StrategyRNG    uint64
+	SearchSpaceRNG uint64
+
+	// CheckpointSafe is true only when no generated batch work is pending.
+	CheckpointSafe bool
 }
 
 // SearchResult contains the outcome of a search run.
@@ -159,6 +175,10 @@ func (r *SearchResult) Summary() string {
 	if r.Cancelled {
 		status = "cancelled"
 	}
+	bestID := "none"
+	if r.BestArchitecture != nil {
+		bestID = r.BestArchitecture.ID[:8]
+	}
 	return fmt.Sprintf(
 		"Search %s (%s):\n"+
 			"  Best Fitness:    %.4f\n"+
@@ -169,7 +189,7 @@ func (r *SearchResult) Summary() string {
 		r.BestFitness,
 		r.TotalEvaluations,
 		r.SearchDuration.Round(time.Millisecond),
-		r.BestArchitecture.ID[:8],
+		bestID,
 	)
 }
 

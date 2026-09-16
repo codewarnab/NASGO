@@ -2,12 +2,18 @@ package main
 
 import (
 	"bytes"
+	"context"
+	"database/sql"
+	"encoding/json"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
+	"nas-go/pkg/storage"
 	"nas-go/pkg/utils"
 )
 
@@ -203,5 +209,174 @@ search:
 	}
 	if !strings.Contains(out, "Nodes per cell:     2") {
 		t.Fatalf("NAS_CONFIG fallback not used:\n%s", out)
+	}
+}
+
+func writeResumeConfig(t *testing.T, db string, maxEvaluations, checkpointInterval int) string {
+	t.Helper()
+	return writeCLIConfig(t, fmt.Sprintf(`
+experiment:
+  name: resume-test
+  seed: 42
+search:
+  strategy: random
+  max_evaluations: %d
+  population_size: 2
+  tournament_size: 1
+  num_workers: 1
+  search_space:
+    num_nodes: 2
+    num_input_nodes: 2
+    edges_per_node: 1
+    operations: [identity, zero]
+evaluator:
+  type: proxy
+storage:
+  type: sqlite
+  path: %q
+  save_history: true
+  checkpoint_interval: %d
+logging:
+  level: error
+  format: text
+`, maxEvaluations, db, checkpointInterval))
+}
+
+func TestRunSearchPeriodicCheckpointAndResume(t *testing.T) {
+	db := filepath.Join(t.TempDir(), "resume.db")
+	configPath := writeResumeConfig(t, db, 2, 1)
+	if _, err := captureStdout(t, func() error { return runSearch([]string{"--config", configPath}) }); err != nil {
+		t.Fatal(err)
+	}
+
+	database, err := sql.Open("sqlite", db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	var experimentID string
+	if err := database.QueryRow(`SELECT id FROM experiments LIMIT 1`).Scan(&experimentID); err != nil {
+		t.Fatal(err)
+	}
+	var count int
+	if err := database.QueryRow(`SELECT count(*) FROM checkpoints WHERE experiment_id=?`, experimentID).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count == 0 {
+		t.Fatal("periodic checkpoint was not saved")
+	}
+
+	resumePath := writeResumeConfig(t, db, 3, 1)
+	if _, err := captureStdout(t, func() error { return runSearch([]string{"--config", resumePath, "--resume", experimentID}) }); err == nil || !strings.Contains(err.Error(), "incompatible") {
+		t.Fatalf("changed budget should fail compatibility check, got %v", err)
+	}
+	if _, err := captureStdout(t, func() error { return runSearch([]string{"--config", configPath, "--resume", experimentID}) }); err != nil {
+		t.Fatalf("same-config resume failed: %v", err)
+	}
+	if err := database.QueryRow(`SELECT count(*) FROM experiments WHERE id=?`, experimentID).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 {
+		t.Fatalf("resume duplicated experiment row: %d", count)
+	}
+}
+
+func TestRunSearchResumeRejectsMissingAndCorruptCheckpoints(t *testing.T) {
+	db := filepath.Join(t.TempDir(), "invalid.db")
+	configPath := writeResumeConfig(t, db, 2, 1)
+	store, err := storage.NewSQLiteStorage(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := utils.LoadConfig(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	configJSON, _ := cfg.ToJSON()
+	for _, id := range []string{"missing-checkpoint", "corrupt-checkpoint"} {
+		if err := store.CreateExperiment(context.Background(), storage.Experiment{ID: id, Name: id, ConfigJSON: string(configJSON), Strategy: "random", StartedAt: time.Now()}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := store.SaveSearchCheckpoint(context.Background(), "corrupt-checkpoint", storage.Checkpoint{Version: 1, Strategy: "random", EvaluationNumber: 2, History: nil, SearchSpaceRNG: 1, ConfigJSON: string(configJSON)}); err != nil {
+		t.Fatal(err)
+	}
+	_ = store.Close()
+	for _, tc := range []struct{ id, want string }{{"absent", "not found"}, {"missing-checkpoint", "no checkpoint"}, {"corrupt-checkpoint", "inconsistent checkpoint"}} {
+		_, err := captureStdout(t, func() error { return runSearch([]string{"--config", configPath, "--resume", tc.id}) })
+		if err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Fatalf("resume %s: err=%v want %q", tc.id, err, tc.want)
+		}
+	}
+}
+
+func TestRunSearchCancellationSavesCheckpoint(t *testing.T) {
+	db := filepath.Join(t.TempDir(), "cancel.db")
+	dir := t.TempDir()
+	script := filepath.Join(dir, "slow.py")
+	marker := filepath.Join(dir, "marker")
+	scriptBody := fmt.Sprintf("import os,time\np=%q\nif not os.path.exists(p):\n open(p,'w').close(); print('{\"validation_accuracy\":0.5}')\nelse:\n time.sleep(10)\n", marker)
+	if err := os.WriteFile(script, []byte(scriptBody), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	configPath := writeCLIConfig(t, fmt.Sprintf(`
+experiment: {name: cancel-test, seed: 42}
+search:
+  strategy: random
+  max_evaluations: 10
+  population_size: 2
+  tournament_size: 1
+  num_workers: 1
+  search_space: {num_nodes: 2, num_input_nodes: 2, edges_per_node: 1, operations: [identity, zero]}
+evaluator:
+  type: trainer
+  dataset: fake
+  script_path: %q
+  python_path: python3
+  timeout: 1m
+storage:
+  type: sqlite
+  path: %q
+  save_history: true
+  checkpoint_interval: 1
+logging: {level: error, format: text}
+`, script, db))
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	_, err := captureStdout(t, func() error { return runSearchContext(ctx, []string{"--config", configPath}) })
+	if err != nil {
+		t.Fatalf("graceful cancellation returned error: %v", err)
+	}
+	database, err := sql.Open("sqlite", db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	var checkpoints int
+	if err := database.QueryRow(`SELECT count(*) FROM checkpoints`).Scan(&checkpoints); err != nil {
+		t.Fatal(err)
+	}
+	// The timed-out trainer result is a completed evaluation; cancellation must preserve a coherent final checkpoint.
+	var status string
+	if err := database.QueryRow(`SELECT status FROM experiments LIMIT 1`).Scan(&status); err != nil {
+		t.Fatal(err)
+	}
+	if status != "cancelled" || checkpoints == 0 {
+		t.Fatalf("status=%s checkpoints=%d", status, checkpoints)
+	}
+}
+
+func TestCheckpointConfigJSONIsValid(t *testing.T) {
+	cfg := utils.DefaultConfig()
+	data, err := cfg.ToJSON()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out map[string]any
+	if err := json.Unmarshal(data, &out); err != nil {
+		t.Fatal(err)
+	}
+	if len(out) == 0 {
+		t.Fatal("empty config JSON")
 	}
 }
