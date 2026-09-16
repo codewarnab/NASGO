@@ -52,3 +52,36 @@ func TestInvalidEnvironmentFails(t *testing.T) {
 		t.Fatal("expected parse error")
 	}
 }
+
+func TestEnvironmentOverridesDefaults(t *testing.T) {
+	t.Setenv("NAS_MAX_EVALUATIONS", " 9 ")
+	t.Setenv("NAS_SEARCH_STRATEGY", "random")
+	c, err := LoadConfigFromEnvironment()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Search.MaxEvaluations != 9 || c.Search.Strategy != "random" {
+		t.Fatalf("unexpected: %+v", c)
+	}
+}
+
+func TestEnvironmentRejectsInvalidValues(t *testing.T) {
+	for _, tc := range []struct{ name, value string }{
+		{"NAS_NUM_WORKERS", "0"},
+		{"NAS_MAX_EVALUATIONS", ""},
+		{"NAS_USE_GPU", "sometimes"},
+		{"NAS_SEARCH_STRATEGY", ""},
+		{"NAS_STORAGE_PATH", "   "},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv(tc.name, tc.value)
+			c, err := LoadConfigFromEnvironment()
+			if err == nil {
+				err = c.Validate()
+			}
+			if err == nil {
+				t.Fatal("expected invalid environment value to fail")
+			}
+		})
+	}
+}

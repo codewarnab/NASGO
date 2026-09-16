@@ -170,3 +170,38 @@ search:
 		}
 	}
 }
+
+func TestRunSearchEnvironmentAndCLIPrecedenceWithoutConfigFlag(t *testing.T) {
+	t.Setenv("NAS_CONFIG", "")
+	t.Setenv("NAS_MAX_EVALUATIONS", "2")
+	t.Setenv("NAS_SEARCH_STRATEGY", "random")
+	t.Setenv("NAS_STORAGE_PATH", filepath.Join(t.TempDir(), "env.db"))
+	out, err := captureStdout(t, func() error {
+		return runSearch([]string{"--evaluations", "1", "--log-level", "error"})
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "Evaluations: 1 | Strategy: random") {
+		t.Fatalf("expected CLI > environment > defaults:\n%s", out)
+	}
+}
+
+func TestRunInfoUsesNASConfigFallback(t *testing.T) {
+	path := writeCLIConfig(t, `
+search:
+  search_space:
+    num_nodes: 2
+    num_input_nodes: 2
+    edges_per_node: 1
+    operations: [identity, zero]
+`)
+	t.Setenv("NAS_CONFIG", path)
+	out, err := captureStdout(t, func() error { return runInfo(nil) })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "Nodes per cell:     2") {
+		t.Fatalf("NAS_CONFIG fallback not used:\n%s", out)
+	}
+}

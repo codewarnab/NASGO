@@ -167,6 +167,19 @@ type LoggingConfig struct {
 
 // DefaultConfig returns sensible defaults for quick experiments.
 func DefaultConfig() *Config {
+	return defaultConfig()
+}
+
+// LoadConfigFromEnvironment applies environment overrides to the defaults.
+func LoadConfigFromEnvironment() (*Config, error) {
+	cfg := defaultConfig()
+	if err := applyEnvironment(cfg); err != nil {
+		return nil, err
+	}
+	return cfg, nil
+}
+
+func defaultConfig() *Config {
 	return &Config{
 		Experiment: ExperimentConfig{
 			Name: "nas-experiment",
@@ -220,8 +233,8 @@ func DefaultConfig() *Config {
 // LoadConfig loads configuration from a YAML file.
 // Missing fields use defaults.
 func LoadConfig(path string) (*Config, error) {
-	// Start with defaults
-	cfg := DefaultConfig()
+	// Start with defaults without applying environment twice.
+	cfg := defaultConfig()
 
 	// Read file
 	data, err := os.ReadFile(path)
@@ -247,6 +260,10 @@ func applyEnvironment(cfg *Config) error {
 		if !ok {
 			return nil
 		}
+		v = strings.TrimSpace(v)
+		if v == "" {
+			return fmt.Errorf("%s must not be empty", name)
+		}
 		n, err := strconv.Atoi(v)
 		if err != nil {
 			return fmt.Errorf("%s must be an integer: %w", name, err)
@@ -259,6 +276,10 @@ func applyEnvironment(cfg *Config) error {
 		if !ok {
 			return nil
 		}
+		v = strings.TrimSpace(v)
+		if v == "" {
+			return fmt.Errorf("%s must not be empty", name)
+		}
 		b, err := strconv.ParseBool(v)
 		if err != nil {
 			return fmt.Errorf("%s must be a boolean: %w", name, err)
@@ -267,7 +288,11 @@ func applyEnvironment(cfg *Config) error {
 		return nil
 	}
 	if v, ok := os.LookupEnv("NAS_SEARCH_STRATEGY"); ok {
-		cfg.Search.Strategy = strings.TrimSpace(v)
+		v = strings.TrimSpace(v)
+		if v == "" {
+			return fmt.Errorf("NAS_SEARCH_STRATEGY must not be empty")
+		}
+		cfg.Search.Strategy = v
 	}
 	if err := setInt("NAS_MAX_EVALUATIONS", &cfg.Search.MaxEvaluations); err != nil {
 		return err
@@ -276,10 +301,18 @@ func applyEnvironment(cfg *Config) error {
 		return err
 	}
 	if v, ok := os.LookupEnv("NAS_EVALUATOR_TYPE"); ok {
-		cfg.Evaluator.Type = strings.TrimSpace(v)
+		v = strings.TrimSpace(v)
+		if v == "" {
+			return fmt.Errorf("NAS_EVALUATOR_TYPE must not be empty")
+		}
+		cfg.Evaluator.Type = v
 	}
 	if v, ok := os.LookupEnv("NAS_STORAGE_PATH"); ok {
-		cfg.Storage.Path = strings.TrimSpace(v)
+		v = strings.TrimSpace(v)
+		if v == "" {
+			return fmt.Errorf("NAS_STORAGE_PATH must not be empty")
+		}
+		cfg.Storage.Path = v
 	}
 	if err := setBool("NAS_USE_GPU", &cfg.Evaluator.UseGPU); err != nil {
 		return err
@@ -333,6 +366,9 @@ func (c *Config) Validate() error {
 	// Check numerical bounds
 	if c.Search.MaxEvaluations < 1 {
 		return fmt.Errorf("max_evaluations must be >= 1")
+	}
+	if c.Search.NumWorkers < 1 {
+		return fmt.Errorf("num_workers must be >= 1")
 	}
 	if c.Search.PopulationSize < 1 {
 		return fmt.Errorf("population_size must be >= 1")
