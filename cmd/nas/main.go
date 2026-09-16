@@ -85,7 +85,7 @@ Use "nas <command> -h" for more information about a command.`)
 // runSearch executes the architecture search.
 func runSearch(args []string) error {
 	// Parse flags
-	fs := flag.NewFlagSet("search", flag.ExitOnError)
+	fs := flag.NewFlagSet("search", flag.ContinueOnError)
 	configPath := fs.String("config", "", "Path to YAML config file")
 	strategy := fs.String("strategy", "", "Search strategy: random, evolutionary, regularized")
 	maxEvals := fs.Int("evaluations", 0, "Maximum number of evaluations")
@@ -313,7 +313,7 @@ func runSearch(args []string) error {
 
 // runInfo prints search space information.
 func runInfo(args []string) error {
-	fs := flag.NewFlagSet("info", flag.ExitOnError)
+	fs := flag.NewFlagSet("info", flag.ContinueOnError)
 	configPath := fs.String("config", "", "Path to YAML config file")
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -389,9 +389,9 @@ func buildEvaluator(cfg *utils.Config, logger *utils.Logger) (evaluator.Evaluato
 				UseGPU:     cfg.Evaluator.UseGPU,
 				GPUDevice:  cfg.Evaluator.GPUDevice,
 			},
-			Epochs:             cfg.Evaluator.Epochs,
-			LearningRate:       cfg.Evaluator.LearningRate,
-			Timeout:            cfg.Evaluator.Timeout,
+			Epochs:       cfg.Evaluator.Epochs,
+			LearningRate: cfg.Evaluator.LearningRate,
+			Timeout:      cfg.Evaluator.Timeout,
 		}
 		return evaluator.NewTrainerEvaluator(trainerConfig, cfg.Evaluator.ScriptPath, cfg.Evaluator.PythonPath)
 
