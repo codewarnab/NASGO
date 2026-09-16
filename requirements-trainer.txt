@@ -1,0 +1,5 @@
+# CPU wheels keep the default trainer image portable. Build a CUDA-specific
+# derivative when GPU evaluation is required.
+torch==2.6.0
+torchvision==0.21.0
+numpy==2.2.3

@@ -26,6 +26,9 @@ WORKDIR /app
 # Install runtime dependencies
 RUN apk add --no-cache ca-certificates python3 py3-pip
 
+COPY requirements-trainer.txt /app/requirements-trainer.txt
+RUN pip3 install --no-cache-dir --break-system-packages -r /app/requirements-trainer.txt
+
 # Copy binary from builder
 COPY --from=builder /app/build/nas /app/nas
 
