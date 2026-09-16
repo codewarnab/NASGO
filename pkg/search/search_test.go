@@ -2,6 +2,7 @@ package search
 
 import (
 	"context"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -316,5 +317,126 @@ func TestAllStrategiesCompile(t *testing.T) {
 		if s.Name() == "" {
 			t.Error("strategy name should not be empty")
 		}
+	}
+}
+
+func TestRandomSearchUsesWorkersWithoutExceedingBudget(t *testing.T) {
+	space := searchspace.DefaultSearchSpace()
+	var current, peak int32
+	cfg := DefaultSearchConfig(space)
+	cfg.MaxEvaluations = 7
+	cfg.NumWorkers = 3
+	cfg.EvaluatorFunc = func(ctx context.Context, a *searchspace.Architecture) (float64, error) {
+		n := atomic.AddInt32(&current, 1)
+		for {
+			p := atomic.LoadInt32(&peak)
+			if n <= p || atomic.CompareAndSwapInt32(&peak, p, n) {
+				break
+			}
+		}
+		time.Sleep(10 * time.Millisecond)
+		atomic.AddInt32(&current, -1)
+		return 1, nil
+	}
+	result, err := NewRandomSearch(42).Search(context.Background(), cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.TotalEvaluations != 7 {
+		t.Fatalf("evaluations=%d", result.TotalEvaluations)
+	}
+	if peak < 2 {
+		t.Fatalf("peak concurrency=%d", peak)
+	}
+}
+
+func TestEvolutionaryStrategiesUseWorkers(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		make func() Searcher
+	}{
+		{name: "evolutionary", make: func() Searcher { return NewEvolutionarySearch(42) }},
+		{name: "regularized", make: func() Searcher { return NewRegularizedEvolution(42) }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := makeTestConfig()
+			cfg.NumWorkers = 3
+			cfg.PopulationSize = 6
+			cfg.MaxEvaluations = 12
+			var active, peak int32
+			cfg.EvaluatorFunc = func(context.Context, *searchspace.Architecture) (float64, error) {
+				n := atomic.AddInt32(&active, 1)
+				for {
+					old := atomic.LoadInt32(&peak)
+					if n <= old || atomic.CompareAndSwapInt32(&peak, old, n) {
+						break
+					}
+				}
+				time.Sleep(5 * time.Millisecond)
+				atomic.AddInt32(&active, -1)
+				return 1, nil
+			}
+			result, err := tc.make().Search(context.Background(), cfg)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if peak < 2 {
+				t.Fatalf("peak concurrency=%d", peak)
+			}
+			if result.TotalEvaluations != cfg.MaxEvaluations {
+				t.Fatalf("evaluations=%d, want %d", result.TotalEvaluations, cfg.MaxEvaluations)
+			}
+		})
+	}
+}
+
+func TestEvolutionaryStrategiesCancelMidDispatchWithoutPanic(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		make func() Searcher
+	}{
+		{name: "evolutionary", make: func() Searcher { return NewEvolutionarySearch(42) }},
+		{name: "regularized", make: func() Searcher { return NewRegularizedEvolution(42) }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := makeTestConfig()
+			cfg.NumWorkers = 8
+			cfg.PopulationSize = 8
+			cfg.MaxEvaluations = 100
+			started := make(chan struct{}, 1)
+			cfg.EvaluatorFunc = func(ctx context.Context, _ *searchspace.Architecture) (float64, error) {
+				select {
+				case started <- struct{}{}:
+				default:
+				}
+				<-ctx.Done()
+				return 0, ctx.Err()
+			}
+			ctx, cancel := context.WithCancel(context.Background())
+			go func() { <-started; cancel() }()
+			result, err := tc.make().Search(ctx, cfg)
+			if err == nil || result == nil || !result.Cancelled {
+				t.Fatalf("result=%+v err=%v", result, err)
+			}
+		})
+	}
+}
+
+func TestEvolutionaryInitializationPersistentErrorsAreBounded(t *testing.T) {
+	cfg := makeTestConfig()
+	cfg.PopulationSize = 4
+	cfg.NumWorkers = 2
+	cfg.MaxEvaluations = 20
+	var calls int32
+	cfg.EvaluatorFunc = func(context.Context, *searchspace.Architecture) (float64, error) {
+		atomic.AddInt32(&calls, 1)
+		return 0, context.DeadlineExceeded
+	}
+	result, err := NewEvolutionarySearch(42).Search(context.Background(), cfg)
+	if err == nil || result != nil {
+		t.Fatalf("result=%+v err=%v", result, err)
+	}
+	if calls > 12 {
+		t.Fatalf("unbounded evaluator calls: %d", calls)
 	}
 }

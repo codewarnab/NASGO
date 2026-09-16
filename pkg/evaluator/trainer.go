@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"time"
 
 	"nas-go/pkg/searchspace"
@@ -169,12 +168,21 @@ func (t *TrainerEvaluator) writeArchitecture(arch *searchspace.Architecture) (st
 		return "", err
 	}
 
-	filename := filepath.Join(t.config.TempDir, fmt.Sprintf("arch_%s.json", arch.ID[:8]))
-	if err := os.WriteFile(filename, data, 0644); err != nil {
+	f, err := os.CreateTemp(t.config.TempDir, "arch_*.json")
+	if err != nil {
 		return "", err
 	}
-
-	return filename, nil
+	name := f.Name()
+	if _, err := f.Write(data); err != nil {
+		_ = f.Close()
+		_ = os.Remove(name)
+		return "", err
+	}
+	if err := f.Close(); err != nil {
+		_ = os.Remove(name)
+		return "", err
+	}
+	return name, nil
 }
 
 // buildArgs constructs command-line arguments for the training script.

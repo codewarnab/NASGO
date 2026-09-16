@@ -2,6 +2,7 @@ package search
 
 import (
 	"context"
+	"fmt"
 	"math/rand"
 	"sort"
 	"time"
@@ -50,154 +51,128 @@ func (e *EvolutionarySearch) Name() string {
 	return "EvolutionarySearch"
 }
 
-// Search runs evolutionary search on the given search space.
-//
-// Algorithm:
-//  1. Initialize random population
-//  2. Evaluate all individuals
-//  3. While budget not exhausted:
-//     a. Select parents (top individuals)
-//     b. Create offspring through mutation
-//     c. Evaluate offspring
-//     d. Replace worst individuals with offspring
-//  4. Return best individual found
+// Search runs evolutionary search. Initial candidates and offspring are
+// evaluated in bounded batches while state updates remain deterministic.
 func (e *EvolutionarySearch) Search(ctx context.Context, config SearchConfig) (*SearchResult, error) {
 	startTime := time.Now()
-
-	// Seed the search space
 	if config.Seed != -1 {
 		config.SearchSpace.SetSeed(config.Seed)
 	}
-
-	result := &SearchResult{
-		History:      make([]*searchspace.Architecture, 0, config.MaxEvaluations),
-		StrategyName: e.Name(),
+	result := &SearchResult{History: make([]*searchspace.Architecture, 0, config.MaxEvaluations), StrategyName: e.Name()}
+	population := make([]*searchspace.Architecture, 0, config.PopulationSize)
+	if len(population) > config.PopulationSize {
+		population = population[len(population)-config.PopulationSize:]
 	}
-
-	// Initialize population with random architectures
-	population := config.SearchSpace.PopulateInitial(config.PopulationSize)
-
-	// Evaluate initial population
-	evaluationCount := 0
-	var bestFitness float64 = -1e9
+	bestFitness := -1e9
 	var bestArch *searchspace.Architecture
+	for _, arch := range result.History {
+		if arch.Metadata.Fitness > bestFitness {
+			bestFitness, bestArch = arch.Metadata.Fitness, arch
+		}
+	}
+	evaluationCount := len(result.History)
+	generation := 0
 
-	for _, arch := range population {
-		// Check for cancellation
-		select {
-		case <-ctx.Done():
-			result.Cancelled = true
-			result.BestArchitecture = bestArch
-			result.BestFitness = bestFitness
-			result.TotalEvaluations = evaluationCount
-			result.SearchDuration = time.Since(startTime)
+	finish := func(cancelled bool) (*SearchResult, error) {
+		result.BestArchitecture, result.BestFitness = bestArch, bestFitness
+		result.TotalEvaluations, result.FinalGeneration = evaluationCount, generation
+		result.SearchDuration, result.Cancelled = time.Since(startTime), cancelled
+		if cancelled {
 			return result, ctx.Err()
-		default:
 		}
-
-		fitness, err := e.evaluateArch(ctx, config, arch)
-		if err != nil {
-			continue
-		}
+		return result, nil
+	}
+	commit := func(o batchOutcome, gen int) {
+		o.arch.Metadata.Fitness, o.arch.Metadata.EvaluationTime = o.fitness, o.duration
 		evaluationCount++
-		result.History = append(result.History, arch)
-
-		if fitness > bestFitness {
-			bestFitness = fitness
-			bestArch = arch
+		result.History = append(result.History, o.arch)
+		if o.fitness > bestFitness {
+			bestFitness, bestArch = o.fitness, o.arch
 		}
-
 		if config.OnEvaluation != nil {
-			config.OnEvaluation(EvaluationEvent{
-				Architecture:     arch,
-				Fitness:          fitness,
-				EvaluationNumber: evaluationCount,
-				TotalEvaluations: config.MaxEvaluations,
-				Duration:         arch.Metadata.EvaluationTime,
-				BestSoFar:        bestFitness,
-				Generation:       0,
-			})
-		}
-
-		if evaluationCount >= config.MaxEvaluations {
-			break
+			config.OnEvaluation(EvaluationEvent{Architecture: o.arch, Fitness: o.fitness, EvaluationNumber: evaluationCount, TotalEvaluations: config.MaxEvaluations, Duration: o.duration, BestSoFar: bestFitness, Generation: gen})
 		}
 	}
 
-	// Evolution loop
-	generation := 1
+	missing := config.PopulationSize - len(population)
+	if remaining := config.MaxEvaluations - evaluationCount; missing > remaining {
+		missing = remaining
+	}
+	failedInitializations := 0
+	maxFailedInitializations := config.PopulationSize * 3
+	if maxFailedInitializations < config.NumWorkers {
+		maxFailedInitializations = config.NumWorkers
+	}
+	for missing > 0 {
+		if ctx.Err() != nil {
+			return finish(true)
+		}
+		n := config.NumWorkers
+		if n < 1 {
+			n = 1
+		}
+		if n > missing {
+			n = missing
+		}
+		batch := config.SearchSpace.PopulateInitial(n)
+		for _, o := range evaluateBatch(ctx, config.NumWorkers, batch, func(c context.Context, a *searchspace.Architecture) (float64, error) {
+			return e.evaluateArch(c, config, a)
+		}) {
+			if o.err != nil || o.arch == nil {
+				failedInitializations++
+				continue
+			}
+			population = append(population, o.arch)
+			commit(o, 0)
+		}
+		if failedInitializations >= maxFailedInitializations && len(population) < config.PopulationSize {
+			return nil, fmt.Errorf("initializing population: evaluator failed %d candidates without filling population", failedInitializations)
+		}
+		missing = config.PopulationSize - len(population)
+		if remaining := config.MaxEvaluations - evaluationCount; missing > remaining {
+			missing = remaining
+		}
+	}
+	if len(population) == 0 {
+		return finish(ctx.Err() != nil)
+	}
+	generation = 1
 	for evaluationCount < config.MaxEvaluations {
-		// Check for cancellation
-		select {
-		case <-ctx.Done():
-			result.Cancelled = true
-			result.BestArchitecture = bestArch
-			result.BestFitness = bestFitness
-			result.TotalEvaluations = evaluationCount
-			result.FinalGeneration = generation
-			result.SearchDuration = time.Since(startTime)
-			return result, ctx.Err()
-		default:
+		if ctx.Err() != nil {
+			return finish(true)
 		}
-
-		// Sort population by fitness (descending)
-		sort.Slice(population, func(i, j int) bool {
-			return population[i].Metadata.Fitness > population[j].Metadata.Fitness
-		})
-
-		// Select parent from top half of population
-		parentIdx := e.rng.Intn(config.PopulationSize / 2)
-		parent := population[parentIdx]
-
-		// Create mutated offspring
-		offspring := config.SearchSpace.Mutate(parent)
-		offspring.Metadata.Generation = generation
-
-		// Evaluate offspring
-		evalStart := time.Now()
-		fitness, err := e.evaluateArch(ctx, config, offspring)
-		if err != nil {
-			continue
+		sort.SliceStable(population, func(i, j int) bool { return population[i].Metadata.Fitness > population[j].Metadata.Fitness })
+		n := config.NumWorkers
+		if n < 1 {
+			n = 1
 		}
-		offspring.Metadata.EvaluationTime = time.Since(evalStart)
-		evaluationCount++
-		result.History = append(result.History, offspring)
-
-		// Update best
-		if fitness > bestFitness {
-			bestFitness = fitness
-			bestArch = offspring
+		if rem := config.MaxEvaluations - evaluationCount; n > rem {
+			n = rem
 		}
-
-		// Replace worst individual with offspring if offspring is better
-		// This is elitist selection - we keep the best individuals
-		worstIdx := len(population) - 1
-		if fitness > population[worstIdx].Metadata.Fitness {
-			population[worstIdx] = offspring
+		batch := make([]*searchspace.Architecture, n)
+		parentPool := (len(population) + 1) / 2
+		for i := range batch {
+			parent := population[e.rng.Intn(parentPool)]
+			batch[i] = config.SearchSpace.Mutate(parent)
+			batch[i].Metadata.Generation = generation
 		}
-
-		if config.OnEvaluation != nil {
-			config.OnEvaluation(EvaluationEvent{
-				Architecture:     offspring,
-				Fitness:          fitness,
-				EvaluationNumber: evaluationCount,
-				TotalEvaluations: config.MaxEvaluations,
-				Duration:         offspring.Metadata.EvaluationTime,
-				BestSoFar:        bestFitness,
-				Generation:       generation,
-			})
+		for _, o := range evaluateBatch(ctx, config.NumWorkers, batch, func(c context.Context, a *searchspace.Architecture) (float64, error) {
+			return e.evaluateArch(c, config, a)
+		}) {
+			if o.err != nil || o.arch == nil {
+				continue
+			}
+			commit(o, generation)
+			sort.SliceStable(population, func(i, j int) bool { return population[i].Metadata.Fitness > population[j].Metadata.Fitness })
+			if len(population) < config.PopulationSize {
+				population = append(population, o.arch)
+			} else if o.fitness > population[len(population)-1].Metadata.Fitness {
+				population[len(population)-1] = o.arch
+			}
 		}
-
 		generation++
 	}
-
-	result.BestArchitecture = bestArch
-	result.BestFitness = bestFitness
-	result.TotalEvaluations = evaluationCount
-	result.FinalGeneration = generation
-	result.SearchDuration = time.Since(startTime)
-
-	return result, nil
+	return finish(false)
 }
 
 // evaluateArch evaluates an architecture and updates its metadata.

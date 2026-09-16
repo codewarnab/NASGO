@@ -3,6 +3,7 @@ package search
 import (
 	"context"
 	"math/rand"
+	"sync"
 	"time"
 
 	"nas-go/pkg/searchspace"
@@ -69,90 +70,85 @@ func (r *RandomSearch) Name() string {
 //   - Error if evaluation fails or context is cancelled
 func (r *RandomSearch) Search(ctx context.Context, config SearchConfig) (*SearchResult, error) {
 	startTime := time.Now()
-
-	// Apply seed to search space for reproducible sampling
 	if config.Seed != -1 {
 		config.SearchSpace.SetSeed(config.Seed)
 	}
-
-	// Initialize result tracking
-	result := &SearchResult{
-		History:      make([]*searchspace.Architecture, 0, config.MaxEvaluations),
-		StrategyName: r.Name(),
+	result := &SearchResult{History: make([]*searchspace.Architecture, 0, config.MaxEvaluations), StrategyName: r.Name()}
+	bestFitness := -1e9
+	var bestArch *searchspace.Architecture
+	workers := config.NumWorkers
+	if workers < 1 {
+		workers = 1
 	}
 
-	var bestFitness float64 = -1e9 // Start with very low value
-	var bestArch *searchspace.Architecture
-
-	// Main search loop
-	for i := 0; i < config.MaxEvaluations; i++ {
-		// Check for cancellation before each evaluation
-		// This is the graceful shutdown pattern - check ctx.Done() regularly
+	for offset := 0; offset < config.MaxEvaluations; {
 		select {
 		case <-ctx.Done():
-			// Context was cancelled (e.g., user pressed Ctrl+C)
 			result.Cancelled = true
 			result.BestArchitecture = bestArch
 			result.BestFitness = bestFitness
-			result.TotalEvaluations = i
+			result.TotalEvaluations = len(result.History)
 			result.SearchDuration = time.Since(startTime)
 			return result, ctx.Err()
 		default:
-			// Continue with search
 		}
-
-		// Sample a random architecture
-		arch := config.SearchSpace.SampleRandomArchitecture()
-		arch.Metadata.Generation = 0 // Random search has no generations
-
-		// Evaluate the architecture
-		evalStart := time.Now()
-		var fitness float64
-		var err error
-
-		if config.EvaluatorFunc != nil {
-			fitness, err = config.EvaluatorFunc(ctx, arch)
-			if err != nil {
-				// If evaluation fails, skip this architecture
-				// In production, you might want more sophisticated error handling
+		batchSize := workers
+		if remaining := config.MaxEvaluations - offset; batchSize > remaining {
+			batchSize = remaining
+		}
+		batch := make([]*searchspace.Architecture, batchSize)
+		for i := range batch {
+			batch[i] = config.SearchSpace.SampleRandomArchitecture()
+			batch[i].Metadata.Generation = 0
+		}
+		type outcome struct {
+			index    int
+			fitness  float64
+			duration time.Duration
+			err      error
+		}
+		outcomes := make(chan outcome, batchSize)
+		var wg sync.WaitGroup
+		for i, arch := range batch {
+			wg.Add(1)
+			go func(i int, arch *searchspace.Architecture) {
+				defer wg.Done()
+				began := time.Now()
+				fitness := -float64(arch.ParameterEstimate())
+				var err error
+				if config.EvaluatorFunc != nil {
+					fitness, err = config.EvaluatorFunc(ctx, arch)
+				}
+				outcomes <- outcome{i, fitness, time.Since(began), err}
+			}(i, arch)
+		}
+		wg.Wait()
+		close(outcomes)
+		ordered := make([]outcome, batchSize)
+		for o := range outcomes {
+			ordered[o.index] = o
+		}
+		for i, o := range ordered {
+			if o.err != nil {
 				continue
 			}
-		} else {
-			// No evaluator provided - use parameter count as proxy
-			// (fewer parameters = higher fitness in this simple case)
-			fitness = -float64(arch.ParameterEstimate())
+			arch := batch[i]
+			arch.Metadata.Fitness = o.fitness
+			arch.Metadata.EvaluationTime = o.duration
+			result.History = append(result.History, arch)
+			if o.fitness > bestFitness {
+				bestFitness = o.fitness
+				bestArch = arch
+			}
+			if config.OnEvaluation != nil {
+				config.OnEvaluation(EvaluationEvent{Architecture: arch, Fitness: o.fitness, EvaluationNumber: offset + i + 1, TotalEvaluations: config.MaxEvaluations, Duration: o.duration, BestSoFar: bestFitness, Generation: 0})
+			}
 		}
-
-		// Record fitness
-		arch.Metadata.Fitness = fitness
-		arch.Metadata.EvaluationTime = time.Since(evalStart)
-		result.History = append(result.History, arch)
-
-		// Update best if this is better
-		if fitness > bestFitness {
-			bestFitness = fitness
-			bestArch = arch
-		}
-
-		// Call evaluation callback if provided
-		if config.OnEvaluation != nil {
-			config.OnEvaluation(EvaluationEvent{
-				Architecture:     arch,
-				Fitness:          fitness,
-				EvaluationNumber: i + 1,
-				TotalEvaluations: config.MaxEvaluations,
-				Duration:         arch.Metadata.EvaluationTime,
-				BestSoFar:        bestFitness,
-				Generation:       0,
-			})
-		}
+		offset += batchSize
 	}
-
-	// Finalize result
 	result.BestArchitecture = bestArch
 	result.BestFitness = bestFitness
 	result.TotalEvaluations = len(result.History)
 	result.SearchDuration = time.Since(startTime)
-
 	return result, nil
 }
