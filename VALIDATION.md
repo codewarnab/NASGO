@@ -85,8 +85,9 @@ the candidate topology sequence for these single-worker runs.
 The run also exposed a checkpoint-frequency defect: with
 `checkpoint_interval: 25`, checkpoint rows were written at evaluations
 25, 26, 27, and every evaluation thereafter instead of only at 25, 50, 75,
-and so on. Each resumed database contained 477 checkpoint rows. Track and fix
-that behavior separately from these validation results.
+and so on. Each resumed database contained 477 checkpoint rows. Tracked
+separately from these validation results in
+[issue #14](https://github.com/codewarnab/NASGO/issues/14).
 
 ## Real PyTorch trainer bridge
 
