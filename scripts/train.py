@@ -169,10 +169,14 @@ class Cell(nn.Module):
         stride = 2 if reduction else 1
         self.num_input_nodes = cell_spec.get("num_input_nodes", 2)
 
-        # Preprocessing: adjust channel dimensions of inputs
+        # Preprocessing: adjust channel dimensions of inputs.
+        # After a reduction cell the two network inputs have different spatial
+        # sizes (DARTS handles this with a FactorizedReduce on the older input),
+        # so each input is first downsized to the cell's working resolution.
         self.preprocess = nn.ModuleList()
         for _ in range(self.num_input_nodes):
             self.preprocess.append(ConvBNReLU(channels, channels, 1, 1, 0))
+        self.spatial_reduce = FactorizedReduce(channels, channels)
 
         # Build nodes from spec
         self.nodes = nn.ModuleList()
@@ -200,8 +204,13 @@ class Cell(nn.Module):
         Forward pass through the cell.
         inputs: list of tensors from previous cells
         """
+        # Working resolution is the smallest input (the most recent cell output);
+        # reduce any larger input so node edges can be summed.
+        target_size = min(inp.shape[-1] for inp in inputs)
         states = []
         for i, inp in enumerate(inputs):
+            while inp.shape[-1] > target_size:
+                inp = self.spatial_reduce(inp)
             states.append(self.preprocess[i](inp))
 
         for node_ops, edges in zip(self.nodes, self.edge_info):
