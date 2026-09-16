@@ -264,6 +264,18 @@ class NASNetwork(nn.Module):
 
 def get_dataset(name, data_path, batch_size):
     """Load dataset with standard augmentation."""
+    if name == "fake":
+        transform = transforms.ToTensor()
+        trainset = torchvision.datasets.FakeData(
+            size=8, image_size=(3, 32, 32), num_classes=10, transform=transform
+        )
+        testset = torchvision.datasets.FakeData(
+            size=4, image_size=(3, 32, 32), num_classes=10, transform=transform
+        )
+        train_loader = torch.utils.data.DataLoader(trainset, batch_size=batch_size, shuffle=True, num_workers=0)
+        test_loader = torch.utils.data.DataLoader(testset, batch_size=batch_size, shuffle=False, num_workers=0)
+        return train_loader, test_loader, 10
+
     if name == "cifar10":
         transform_train = transforms.Compose([
             transforms.RandomCrop(32, padding=4),
@@ -444,7 +456,7 @@ def train_architecture(args):
 def main():
     parser = argparse.ArgumentParser(description="Train NAS architecture")
     parser.add_argument("--arch", required=True, help="Path to architecture JSON file")
-    parser.add_argument("--dataset", default="cifar10", choices=["cifar10", "cifar100"])
+    parser.add_argument("--dataset", default="cifar10", choices=["cifar10", "cifar100", "fake"])
     parser.add_argument("--data-path", default="./data", help="Path to dataset")
     parser.add_argument("--epochs", type=int, default=50)
     parser.add_argument("--batch-size", type=int, default=64)

@@ -1,5 +1,5 @@
-# CPU wheels keep the default trainer image portable. Build a CUDA-specific
-# derivative when GPU evaluation is required.
+# Use PyTorch's CPU-only wheel index. CUDA images should use a separate lock/base.
+--index-url https://download.pytorch.org/whl/cpu
 torch==2.6.0
 torchvision==0.21.0
 numpy==2.2.3

@@ -4,7 +4,6 @@ on:
   push:
     branches: [main]
   pull_request:
-    branches: [main]
 
 jobs:
   test:
@@ -94,3 +93,17 @@ jobs:
         with:
           name: nas-${{ matrix.goos }}-${{ matrix.goarch }}
           path: build/
+
+
+  container-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build trainer image
+        run: docker build -t nasgo:trainer .
+      - name: Verify CPU dependencies and Python executable
+        run: docker run --rm --entrypoint python nasgo:trainer -c 'import torch, torchvision; assert not torch.cuda.is_available(); print(torch.__version__)'
+      - name: Run trainer bridge smoke
+        run: docker run --rm nasgo:trainer search --config /app/configs/smoke.yaml
+      - name: Run proxy regression in image
+        run: docker run --rm nasgo:trainer search --config /app/configs/smoke.yaml --evaluator proxy
