@@ -256,6 +256,15 @@ func runSearchContext(ctx context.Context, args []string) error {
 	checkpointHistory := append([]*searchspace.Architecture(nil), resumeHistory...)
 	var latestSafeEvent search.EvaluationEvent
 	safeCheckpointHistory := append([]*searchspace.Architecture(nil), resumeHistory...)
+	// Periodic checkpoints are written at the first checkpoint-safe evaluation
+	// that reaches each multiple of the interval, never more often. Parallel
+	// strategies only mark batch-boundary evaluations as checkpoint-safe, so
+	// the saved evaluation can land just past a multiple; alignment is kept
+	// across resumes by starting from the resumed history length.
+	nextCheckpoint := cfg.Storage.CheckpointInterval
+	if cfg.Storage.CheckpointInterval > 0 && len(resumeHistory) > 0 {
+		nextCheckpoint = (len(resumeHistory)/cfg.Storage.CheckpointInterval + 1) * cfg.Storage.CheckpointInterval
+	}
 	var resumePopulation []*searchspace.Architecture
 	var resumeStrategyRNG, resumeSearchSpaceRNG uint64
 	if *resumeID != "" {
@@ -288,10 +297,11 @@ func runSearchContext(ctx context.Context, args []string) error {
 				latestSafeEvent = event
 				safeCheckpointHistory = append([]*searchspace.Architecture(nil), checkpointHistory...)
 			}
-			if store != nil && cfg.Storage.CheckpointInterval > 0 && event.CheckpointSafe && event.EvaluationNumber >= cfg.Storage.CheckpointInterval {
+			if store != nil && cfg.Storage.CheckpointInterval > 0 && event.CheckpointSafe && event.EvaluationNumber >= nextCheckpoint {
 				if err := store.SaveSearchCheckpoint(context.Background(), experimentID, storage.Checkpoint{Version: 1, Strategy: cfg.Search.Strategy, EvaluationNumber: event.EvaluationNumber, History: safeCheckpointHistory, BestFitness: event.BestSoFar, Population: event.Population, StrategyRNG: event.StrategyRNG, SearchSpaceRNG: event.SearchSpaceRNG, ConfigJSON: string(configJSON)}); err != nil {
 					logger.Warn("failed to save checkpoint", "error", err)
 				}
+				nextCheckpoint = (event.EvaluationNumber/cfg.Storage.CheckpointInterval + 1) * cfg.Storage.CheckpointInterval
 			}
 			if event.EvaluationNumber%100 == 0 || event.EvaluationNumber == 1 {
 				logger.Progress(event.EvaluationNumber, event.TotalEvaluations, event.BestSoFar)
