@@ -440,3 +440,45 @@ func TestEvolutionaryInitializationPersistentErrorsAreBounded(t *testing.T) {
 		t.Fatalf("unbounded evaluator calls: %d", calls)
 	}
 }
+
+func TestRandomSearchResumeDoesNotReevaluateHistory(t *testing.T) {
+	space := searchspace.DefaultSearchSpace()
+	done := space.SampleRandomArchitecture()
+	done.Metadata.Fitness = 2
+	var calls int32
+	cfg := DefaultSearchConfig(space)
+	cfg.MaxEvaluations = 3
+	cfg.ResumeHistory = []*searchspace.Architecture{done}
+	cfg.EvaluatorFunc = func(context.Context, *searchspace.Architecture) (float64, error) {
+		atomic.AddInt32(&calls, 1)
+		return 1, nil
+	}
+	r, err := NewRandomSearch(42).Search(context.Background(), cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if calls != 2 || r.TotalEvaluations != 3 || r.BestArchitecture.ID != done.ID {
+		t.Fatalf("calls=%d result=%+v", calls, r)
+	}
+}
+func TestEvolutionaryResumeDoesNotReevaluateHistory(t *testing.T) {
+	space := searchspace.DefaultSearchSpace()
+	done := space.SampleRandomArchitecture()
+	done.Metadata.Fitness = 2
+	var calls int32
+	cfg := DefaultSearchConfig(space)
+	cfg.PopulationSize = 2
+	cfg.MaxEvaluations = 3
+	cfg.ResumeHistory = []*searchspace.Architecture{done}
+	cfg.EvaluatorFunc = func(context.Context, *searchspace.Architecture) (float64, error) {
+		atomic.AddInt32(&calls, 1)
+		return 1, nil
+	}
+	r, err := NewEvolutionarySearch(42).Search(context.Background(), cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if calls != 2 || r.TotalEvaluations != 3 {
+		t.Fatalf("calls=%d result=%+v", calls, r)
+	}
+}

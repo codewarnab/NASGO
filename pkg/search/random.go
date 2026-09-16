@@ -73,15 +73,21 @@ func (r *RandomSearch) Search(ctx context.Context, config SearchConfig) (*Search
 	if config.Seed != -1 {
 		config.SearchSpace.SetSeed(config.Seed)
 	}
-	result := &SearchResult{History: make([]*searchspace.Architecture, 0, config.MaxEvaluations), StrategyName: r.Name()}
+	result := &SearchResult{History: append([]*searchspace.Architecture(nil), config.ResumeHistory...), StrategyName: r.Name()}
 	bestFitness := -1e9
 	var bestArch *searchspace.Architecture
+	for _, arch := range result.History {
+		if arch.Metadata.Fitness > bestFitness {
+			bestFitness = arch.Metadata.Fitness
+			bestArch = arch
+		}
+	}
 	workers := config.NumWorkers
 	if workers < 1 {
 		workers = 1
 	}
 
-	for offset := 0; offset < config.MaxEvaluations; {
+	for offset := len(result.History); offset < config.MaxEvaluations; {
 		select {
 		case <-ctx.Done():
 			result.Cancelled = true

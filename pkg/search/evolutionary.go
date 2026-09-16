@@ -58,8 +58,8 @@ func (e *EvolutionarySearch) Search(ctx context.Context, config SearchConfig) (*
 	if config.Seed != -1 {
 		config.SearchSpace.SetSeed(config.Seed)
 	}
-	result := &SearchResult{History: make([]*searchspace.Architecture, 0, config.MaxEvaluations), StrategyName: e.Name()}
-	population := make([]*searchspace.Architecture, 0, config.PopulationSize)
+	result := &SearchResult{History: append([]*searchspace.Architecture(nil), config.ResumeHistory...), StrategyName: e.Name()}
+	population := append([]*searchspace.Architecture(nil), config.ResumeHistory...)
 	if len(population) > config.PopulationSize {
 		population = population[len(population)-config.PopulationSize:]
 	}

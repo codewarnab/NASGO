@@ -240,6 +240,48 @@ func (s *SQLiteStorage) SaveCheckpoint(ctx context.Context, experimentID string,
 	return err
 }
 
+// Checkpoint is a versioned resumable search snapshot.
+type Checkpoint struct {
+	Version          int                         `json:"version"`
+	Strategy         string                      `json:"strategy"`
+	EvaluationNumber int                         `json:"evaluation_number"`
+	History          []*searchspace.Architecture `json:"history"`
+	BestFitness      float64                     `json:"best_fitness"`
+}
+
+// SaveSearchCheckpoint stores a complete versioned snapshot.
+func (s *SQLiteStorage) SaveSearchCheckpoint(ctx context.Context, experimentID string, cp Checkpoint) error {
+	if cp.Version == 0 {
+		cp.Version = 1
+	}
+	data, err := json.Marshal(cp)
+	if err != nil {
+		return err
+	}
+	_, err = s.db.ExecContext(ctx, `INSERT INTO checkpoints (experiment_id,evaluation_number,population_json,best_fitness,created_at) VALUES (?,?,?,?,?)`, experimentID, cp.EvaluationNumber, string(data), cp.BestFitness, time.Now())
+	return err
+}
+
+// LoadLatestCheckpoint restores the latest snapshot for an experiment.
+func (s *SQLiteStorage) LoadLatestCheckpoint(ctx context.Context, experimentID string) (*Checkpoint, error) {
+	var raw string
+	err := s.db.QueryRowContext(ctx, `SELECT population_json FROM checkpoints WHERE experiment_id=? ORDER BY evaluation_number DESC,id DESC LIMIT 1`, experimentID).Scan(&raw)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var cp Checkpoint
+	if err = json.Unmarshal([]byte(raw), &cp); err != nil {
+		return nil, fmt.Errorf("decoding checkpoint: %w", err)
+	}
+	if cp.Version != 1 {
+		return nil, fmt.Errorf("unsupported checkpoint version %d", cp.Version)
+	}
+	return &cp, nil
+}
+
 // Close closes the database connection.
 func (s *SQLiteStorage) Close() error {
 	return s.db.Close()

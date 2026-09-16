@@ -97,6 +97,7 @@ func runSearch(args []string) error {
 	dbPath := fs.String("db", "", "SQLite database path")
 	logLevel := fs.String("log-level", "", "Log level: debug, info, warn, error")
 	outputJSON := fs.Bool("json", false, "Output results as JSON")
+	resumeID := fs.String("resume", "", "Resume an experiment from its latest checkpoint")
 
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -190,6 +191,34 @@ func runSearch(args []string) error {
 
 	// Create experiment record
 	experimentID := uuid.New().String()
+	var resumeHistory []*searchspace.Architecture
+	if *resumeID != "" {
+		if store == nil {
+			return fmt.Errorf("--resume requires sqlite storage")
+		}
+		exp, err := store.GetExperiment(context.Background(), *resumeID)
+		if err != nil {
+			return fmt.Errorf("loading experiment: %w", err)
+		}
+		if exp == nil {
+			return fmt.Errorf("experiment %s not found", *resumeID)
+		}
+		if exp.Strategy != cfg.Search.Strategy {
+			return fmt.Errorf("resume strategy mismatch: checkpoint uses %s", exp.Strategy)
+		}
+		cp, err := store.LoadLatestCheckpoint(context.Background(), *resumeID)
+		if err != nil {
+			return err
+		}
+		if cp == nil {
+			return fmt.Errorf("no checkpoint found for experiment %s", *resumeID)
+		}
+		if cp.Strategy != cfg.Search.Strategy {
+			return fmt.Errorf("checkpoint strategy mismatch: %s", cp.Strategy)
+		}
+		resumeHistory = cp.History
+		experimentID = *resumeID
+	}
 	if store != nil {
 		configJSON, _ := cfg.ToJSON()
 		exp := storage.Experiment{
@@ -212,6 +241,7 @@ func runSearch(args []string) error {
 	}
 
 	// Configure search
+	checkpointHistory := append([]*searchspace.Architecture(nil), resumeHistory...)
 	searchCfg := search.SearchConfig{
 		SearchSpace:    space,
 		MaxEvaluations: cfg.Search.MaxEvaluations,
@@ -226,8 +256,15 @@ func runSearch(args []string) error {
 			}
 			return result.Fitness, nil
 		},
+		ResumeHistory: resumeHistory,
 		OnEvaluation: func(event search.EvaluationEvent) {
 			// Log progress
+			checkpointHistory = append(checkpointHistory, event.Architecture)
+			if store != nil && cfg.Storage.CheckpointInterval > 0 && event.EvaluationNumber%cfg.Storage.CheckpointInterval == 0 {
+				if err := store.SaveSearchCheckpoint(context.Background(), experimentID, storage.Checkpoint{Version: 1, Strategy: cfg.Search.Strategy, EvaluationNumber: event.EvaluationNumber, History: checkpointHistory, BestFitness: event.BestSoFar}); err != nil {
+					logger.Warn("failed to save checkpoint", "error", err)
+				}
+			}
 			if event.EvaluationNumber%100 == 0 || event.EvaluationNumber == 1 {
 				logger.Progress(event.EvaluationNumber, event.TotalEvaluations, event.BestSoFar)
 			}

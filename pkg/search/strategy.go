@@ -83,6 +83,9 @@ type SearchConfig struct {
 	// Useful for logging, checkpointing, or early stopping.
 	// Can be nil.
 	OnEvaluation EvaluationCallback `json:"-"`
+
+	// ResumeHistory contains completed evaluations restored from a checkpoint.
+	ResumeHistory []*searchspace.Architecture `json:"-"`
 }
 
 // EvaluatorFunc is a function type for evaluating architectures.

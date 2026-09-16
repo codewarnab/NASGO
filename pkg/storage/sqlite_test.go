@@ -46,3 +46,24 @@ func TestSQLiteExperimentArchitectureAndCheckpoint(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+func TestCheckpointRoundTrip(t *testing.T) {
+	ctx := context.Background()
+	s, err := NewSQLiteStorage(filepath.Join(t.TempDir(), "nas.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	a := searchspace.DefaultSearchSpace().SampleRandomArchitecture()
+	a.Metadata.Fitness = .8
+	cp := Checkpoint{Version: 1, Strategy: "random", EvaluationNumber: 1, History: []*searchspace.Architecture{a}, BestFitness: .8}
+	if err = s.SaveSearchCheckpoint(ctx, "e", cp); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.LoadLatestCheckpoint(ctx, "e")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got == nil || got.EvaluationNumber != 1 || len(got.History) != 1 {
+		t.Fatalf("got=%+v", got)
+	}
+}
