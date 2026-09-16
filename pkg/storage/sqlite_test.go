@@ -3,10 +3,11 @@ package storage
 import (
 	"context"
 	"math"
-	"nas-go/pkg/searchspace"
 	"path/filepath"
 	"testing"
 	"time"
+
+	"nas-go/pkg/searchspace"
 )
 
 func TestSQLiteExperimentArchitectureAndCheckpoint(t *testing.T) {
