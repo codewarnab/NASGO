@@ -84,6 +84,12 @@ Use "nas <command> -h" for more information about a command.`)
 
 // runSearch executes the architecture search.
 func runSearch(args []string) error {
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+	return runSearchContext(ctx, args)
+}
+
+func runSearchContext(ctx context.Context, args []string) error {
 	// Parse flags
 	fs := flag.NewFlagSet("search", flag.ContinueOnError)
 	configPath := fs.String("config", "", "Path to YAML config file")
@@ -298,18 +304,6 @@ func runSearch(args []string) error {
 			}
 		},
 	}
-
-	// Setup graceful shutdown
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
-	go func() {
-		sig := <-sigCh
-		logger.Info("received signal, shutting down gracefully", "signal", sig)
-		cancel()
-	}()
 
 	// Run search
 	fmt.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
