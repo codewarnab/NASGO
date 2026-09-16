@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -232,7 +234,57 @@ func LoadConfig(path string) (*Config, error) {
 		return nil, fmt.Errorf("parsing config YAML: %w", err)
 	}
 
+	if err := applyEnvironment(cfg); err != nil {
+		return nil, err
+	}
+
 	return cfg, nil
+}
+
+func applyEnvironment(cfg *Config) error {
+	setInt := func(name string, dst *int) error {
+		v, ok := os.LookupEnv(name)
+		if !ok {
+			return nil
+		}
+		n, err := strconv.Atoi(v)
+		if err != nil {
+			return fmt.Errorf("%s must be an integer: %w", name, err)
+		}
+		*dst = n
+		return nil
+	}
+	setBool := func(name string, dst *bool) error {
+		v, ok := os.LookupEnv(name)
+		if !ok {
+			return nil
+		}
+		b, err := strconv.ParseBool(v)
+		if err != nil {
+			return fmt.Errorf("%s must be a boolean: %w", name, err)
+		}
+		*dst = b
+		return nil
+	}
+	if v, ok := os.LookupEnv("NAS_SEARCH_STRATEGY"); ok {
+		cfg.Search.Strategy = strings.TrimSpace(v)
+	}
+	if err := setInt("NAS_MAX_EVALUATIONS", &cfg.Search.MaxEvaluations); err != nil {
+		return err
+	}
+	if err := setInt("NAS_NUM_WORKERS", &cfg.Search.NumWorkers); err != nil {
+		return err
+	}
+	if v, ok := os.LookupEnv("NAS_EVALUATOR_TYPE"); ok {
+		cfg.Evaluator.Type = strings.TrimSpace(v)
+	}
+	if v, ok := os.LookupEnv("NAS_STORAGE_PATH"); ok {
+		cfg.Storage.Path = strings.TrimSpace(v)
+	}
+	if err := setBool("NAS_USE_GPU", &cfg.Evaluator.UseGPU); err != nil {
+		return err
+	}
+	return nil
 }
 
 // Save writes configuration to a YAML file.
